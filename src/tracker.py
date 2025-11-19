@@ -127,7 +127,10 @@ class SORTTracker:
         to_del = []
         for t, trk in enumerate(trks):
             pos = self.trackers[t].predict()[0]
-            trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
+            # Ensure pos is a 1D array
+            pos = np.atleast_1d(pos).flatten()
+            if len(pos) >= 4:
+                trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
             if np.any(np.isnan(pos)):
                 to_del.append(t)
                 
