@@ -1,0 +1,69 @@
+# CCTV People Counter Configuration
+
+# Camera Settings
+camera:
+  source: 0  # 0 for webcam, or path to video file, or RTSP URL (e.g., "rtsp://username:password@ip:port/stream")
+  width: 1280
+  height: 720
+  fps: 30
+  
+# Detection Settings
+detection:
+  model: "yolov8n.pt"  # yolov8n (fastest), yolov8s, yolov8m, yolov8l, yolov8x (most accurate)
+  confidence: 0.5  # Minimum confidence threshold (0.0 - 1.0)
+  device: "cpu"  # "cpu" or "cuda" for GPU
+  classes: [0]  # 0 = person in COCO dataset
+  
+# Tracking Settings
+tracking:
+  max_age: 30  # Maximum frames to keep alive a track without detections
+  min_hits: 3  # Minimum hits to consider a track valid
+  iou_threshold: 0.3  # IOU threshold for matching
+  
+# Counting Line Settings
+counting_line:
+  # Line coordinates as percentage of frame (0.0 - 1.0)
+  # Format: [x1, y1, x2, y2]
+  # Example: [0.3, 0.5, 0.7, 0.5] = horizontal line at 50% height, from 30% to 70% width
+  coordinates: [0.2, 0.5, 0.8, 0.5]
+  
+  # Direction mapping
+  # "up" = moving upward crosses as IN
+  # "down" = moving downward crosses as IN
+  # "left" = moving left crosses as IN
+  # "right" = moving right crosses as IN
+  in_direction: "down"
+  
+  # Line appearance
+  color: [0, 255, 0]  # BGR format
+  thickness: 3
+  
+# Processing Settings
+processing:
+  skip_frames: 1  # Process every Nth frame (1 = process all frames)
+  roi_enabled: false  # Enable Region of Interest
+  roi_coordinates: [0, 0, 1, 1]  # [x1, y1, x2, y2] as percentage
+  
+# Display Settings
+display:
+  show_video: true
+  show_detections: true
+  show_tracks: true
+  show_trails: true
+  trail_length: 30
+  show_counts: true
+  save_output: false
+  output_path: "output/output.avi"
+  
+# Database Settings
+database:
+  enabled: true
+  path: "people_counter.db"
+  log_events: true
+  
+# Logging Settings
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  file: "logs/app.log"
+  console: true
+
