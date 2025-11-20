@@ -2,7 +2,14 @@
 
 # Camera Settings
 camera:
-  source: 0  # 0 for webcam, or path to video file, or RTSP URL (e.g., "rtsp://username:password@ip:port/stream")
+  source: 0  # Default source (0=webcam). Override with RTSP_URL environment variable
+  # To use RTSP camera, set RTSP_URL in .env file:
+  # RTSP_URL=rtsp://admin:password@192.168.1.100:555/stream1
+  # Examples:
+  # - Webcam: 0
+  # - Video file: "path/to/video.mp4"
+  # - RTSP: Set RTSP_URL environment variable
+  # - HTTP: "http://camera_ip/video"
   width: 1280
   height: 720
   fps: 30
@@ -10,39 +17,46 @@ camera:
 # Detection Settings
 detection:
   model: "yolov8n.pt"  # yolov8n (fastest), yolov8s, yolov8m, yolov8l, yolov8x (most accurate)
-  confidence: 0.5  # Minimum confidence threshold (0.0 - 1.0)
+  confidence: 0.4  # Minimum confidence threshold (0.0 - 1.0) - lowered for better detection
   device: "cpu"  # "cpu" or "cuda" for GPU
   classes: [0]  # 0 = person in COCO dataset
+  imgsz: 480  # Input image size for YOLO (smaller = faster, default 640)
   
 # Tracking Settings
 tracking:
-  max_age: 30  # Maximum frames to keep alive a track without detections
-  min_hits: 3  # Minimum hits to consider a track valid
-  iou_threshold: 0.3  # IOU threshold for matching
+  max_age: 40  # Maximum frames to keep alive a track without detections (increased for groups)
+  min_hits: 1  # Minimum hits to consider a track valid (1 = immediate tracking)
+  iou_threshold: 0.2  # IOU threshold for matching (increased for better group handling)
   
 # Counting Line Settings
 counting_line:
   # Line coordinates as percentage of frame (0.0 - 1.0)
   # Format: [x1, y1, x2, y2]
   # Example: [0.3, 0.5, 0.7, 0.5] = horizontal line at 50% height, from 30% to 70% width
-  coordinates: [0.2, 0.5, 0.8, 0.5]
-  
+  # Moved to 60% to be further inside the doorway (after fingerprint scanner)
+  coordinates: [0.2, 0.6, 0.8, 0.6]
+
   # Direction mapping
   # "up" = moving upward crosses as IN
   # "down" = moving downward crosses as IN
   # "left" = moving left crosses as IN
   # "right" = moving right crosses as IN
   in_direction: "down"
-  
+
   # Line appearance
   color: [0, 255, 0]  # BGR format
   thickness: 3
+
+  # Counting parameters
+  cooldown_frames: 75  # Increased cooldown to prevent re-counting (3 seconds at 25fps)
+  min_track_length: 5  # Minimum track history before counting
   
 # Processing Settings
 processing:
-  skip_frames: 1  # Process every Nth frame (1 = process all frames)
+  skip_frames: 2  # Process every Nth frame (2 = every other frame for better speed)
   roi_enabled: false  # Enable Region of Interest
   roi_coordinates: [0, 0, 1, 1]  # [x1, y1, x2, y2] as percentage
+  num_threads: 4  # Number of CPU threads for processing
   
 # Display Settings
 display:

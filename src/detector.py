@@ -39,8 +39,9 @@ class PersonDetector:
         # Detection parameters
         self.confidence = self.config['confidence']
         self.classes = self.config['classes']  # [0] for person class
-        
-        self.logger.info(f"Detector initialized - Device: {self.device}, Confidence: {self.confidence}")
+        self.imgsz = self.config.get('imgsz', 640)  # Image size for inference
+
+        self.logger.info(f"Detector initialized - Device: {self.device}, Confidence: {self.confidence}, ImgSize: {self.imgsz}")
     
     def detect(self, frame):
         """
@@ -57,6 +58,7 @@ class PersonDetector:
             frame,
             conf=self.confidence,
             classes=self.classes,
+            imgsz=self.imgsz,
             verbose=False
         )
         
@@ -77,9 +79,13 @@ class PersonDetector:
                         float(conf),                # confidence
                         int(cls_id)                 # class_id
                     ])
-        
+
+        # Log detection count periodically
+        if len(detections) > 0:
+            self.logger.debug(f"Detected {len(detections)} person(s)")
+
         return detections
-    
+
     def get_centroids(self, detections):
         """
         Calculate centroids of bounding boxes

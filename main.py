@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 import logging
 import argparse
+import time
+import os
 from pathlib import Path
 
 from src.utils import load_config, setup_logging, convert_line_coords, create_directories
@@ -22,14 +24,22 @@ class PeopleCounterApp:
         """Initialize the application"""
         # Load configuration
         self.config = load_config(config_path)
-        
+
         # Setup logging
         create_directories()
         self.logger = setup_logging(self.config)
         self.logger.info("=" * 60)
         self.logger.info("CCTV People Counter Application Starting")
         self.logger.info("=" * 60)
-        
+
+        # Set CPU thread count for OpenCV and NumPy
+        num_threads = self.config['processing'].get('num_threads', 4)
+        cv2.setNumThreads(num_threads)
+        os.environ['OMP_NUM_THREADS'] = str(num_threads)
+        os.environ['OPENBLAS_NUM_THREADS'] = str(num_threads)
+        os.environ['MKL_NUM_THREADS'] = str(num_threads)
+        self.logger.info(f"Set CPU threads to {num_threads}")
+
         # Initialize components
         self.detector = PersonDetector(self.config)
         self.tracker = SORTTracker(self.config)
@@ -53,22 +63,29 @@ class PeopleCounterApp:
         
     def initialize_video(self):
         """Initialize video capture"""
-        source = self.config['camera']['source']
-        self.logger.info(f"Initializing video source: {source}")
-        
-        self.cap = cv2.VideoCapture(source)
-        
+        self.source = self.config['camera']['source']
+        self.logger.info(f"Initializing video source: {self.source}")
+
+        # Configure for RTSP streams
+        self.cap = cv2.VideoCapture(self.source)
+
+        # Set buffer size to reduce latency for RTSP streams
+        if isinstance(self.source, str) and self.source.startswith('rtsp'):
+            self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            # Use TCP for more reliable RTSP connection
+            self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'H264'))
+
         if not self.cap.isOpened():
-            self.logger.error(f"Failed to open video source: {source}")
+            self.logger.error(f"Failed to open video source: {self.source}")
             return False
-        
+
         # Get video properties
         self.frame_width = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         self.frame_height = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
         self.fps = int(self.cap.get(cv2.CAP_PROP_FPS))
-        
+
         if self.fps == 0:
-            self.fps = 30  # Default FPS
+            self.fps = 25  # Default FPS for RTSP
         
         self.logger.info(f"Video initialized - Resolution: {self.frame_width}x{self.frame_height}, FPS: {self.fps}")
         
@@ -98,11 +115,25 @@ class PeopleCounterApp:
         line_coords = convert_line_coords(line_coords_norm, self.frame_width, self.frame_height)
         color = tuple(self.config['counting_line']['color'])
         thickness = self.config['counting_line']['thickness']
-        
-        cv2.line(annotated_frame, 
-                (line_coords[0], line_coords[1]), 
-                (line_coords[2], line_coords[3]), 
+
+        cv2.line(annotated_frame,
+                (line_coords[0], line_coords[1]),
+                (line_coords[2], line_coords[3]),
                 color, thickness)
+
+        # Draw zone labels
+        # Calculate midpoint of line
+        mid_x = (line_coords[0] + line_coords[2]) // 2
+        mid_y = (line_coords[1] + line_coords[3]) // 2
+
+        # For horizontal line with IN=down, outside is above, inside is below
+        if self.config['counting_line']['in_direction'] == 'down':
+            outside_y = mid_y - 40
+            inside_y = mid_y + 40
+            cv2.putText(annotated_frame, "OUTSIDE", (mid_x - 50, outside_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+            cv2.putText(annotated_frame, "INSIDE", (mid_x - 40, inside_y),
+                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
         # Draw detections
         if self.config['display']['show_detections']:
@@ -116,18 +147,24 @@ class PeopleCounterApp:
                 x1, y1, x2, y2, track_id = track
                 x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
                 track_id = int(track_id)
-                
-                # Draw bounding box
-                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
-                
-                # Draw ID
-                cv2.putText(annotated_frame, f"ID: {track_id}", 
-                           (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 
-                           0.5, (0, 255, 0), 2)
-                
-                # Draw centroid
+
+                # Calculate centroid
                 cx = int((x1 + x2) / 2)
                 cy = int((y1 + y2) / 2)
+
+                # Get zone for this track
+                zone = self.counter._get_zone((cx, cy))
+                zone_color = (255, 0, 0) if zone == 'outside' else (0, 255, 255)  # Blue for outside, Yellow for inside
+
+                # Draw bounding box with zone color
+                cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), zone_color, 2)
+
+                # Draw ID and zone
+                cv2.putText(annotated_frame, f"ID: {track_id} ({zone})",
+                           (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                           0.5, zone_color, 2)
+
+                # Draw centroid
                 cv2.circle(annotated_frame, (cx, cy), 4, (0, 0, 255), -1)
                 
                 # Draw trail
@@ -194,9 +231,24 @@ class PeopleCounterApp:
             while True:
                 ret, frame = self.cap.read()
 
-                if not ret:
-                    self.logger.warning("Failed to read frame or end of video")
-                    break
+                if not ret or frame is None:
+                    self.logger.warning("Failed to read frame from RTSP stream")
+                    # Try to reconnect to RTSP stream
+                    self.logger.info("Attempting to reconnect to RTSP stream...")
+                    self.cap.release()
+                    time.sleep(2)
+
+                    # Reconnect with RTSP settings
+                    self.cap = cv2.VideoCapture(self.source)
+                    if isinstance(self.source, str) and self.source.startswith('rtsp'):
+                        self.cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+                        self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*'H264'))
+
+                    if not self.cap.isOpened():
+                        self.logger.error("Failed to reconnect to RTSP stream")
+                        break
+                    self.logger.info("Reconnected to RTSP stream successfully")
+                    continue
 
                 self.frame_count += 1
 
@@ -204,7 +256,7 @@ class PeopleCounterApp:
                 if self.frame_count % self.skip_frames != 0:
                     continue
 
-                # Process frame
+                # Process frame directly (no resizing to avoid coordinate issues)
                 detections, tracks, events = self.process_frame(frame)
 
                 # Draw annotations
@@ -212,7 +264,14 @@ class PeopleCounterApp:
 
                 # Display frame
                 if self.config['display']['show_video']:
-                    cv2.imshow('CCTV People Counter', annotated_frame)
+                    # Resize for display to reduce window size
+                    display_frame = cv2.resize(annotated_frame, (960, 540))
+                    cv2.imshow('CCTV People Counter', display_frame)
+
+                    # Check if window was closed
+                    if cv2.getWindowProperty('CCTV People Counter', cv2.WND_PROP_VISIBLE) < 1:
+                        self.logger.info("Display window was closed")
+                        break
 
                 # Save to video file
                 if self.video_writer:
@@ -235,7 +294,7 @@ class PeopleCounterApp:
                 # Log progress every 100 frames
                 if self.frame_count % 100 == 0:
                     counts = self.counter.get_counts()
-                    self.logger.info(f"Frame {self.frame_count} - IN: {counts['in']}, OUT: {counts['out']}, Occupancy: {counts['occupancy']}")
+                    self.logger.info(f"Frame {self.frame_count} - Detections: {len(detections)}, Tracks: {len(tracks)}, IN: {counts['in']}, OUT: {counts['out']}, Occupancy: {counts['occupancy']}")
 
         except KeyboardInterrupt:
             self.logger.info("Interrupted by user")

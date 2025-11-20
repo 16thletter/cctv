@@ -85,11 +85,22 @@ class KalmanBoxTracker:
     @staticmethod
     def _convert_x_to_bbox(x):
         """Convert [cx,cy,s,r] to [x1,y1,x2,y2]"""
-        w = np.sqrt(x[2] * x[3])
-        h = x[2] / w if w != 0 else 1
+        # Extract values, handling both scalar and array types
+        cx = float(x[0])
+        cy = float(x[1])
+        s = float(x[2])
+        r = float(x[3])
+
+        # Ensure positive values
+        s = max(s, 1.0)
+        r = max(min(r, 10.0), 0.1)
+
+        w = np.sqrt(s * r)
+        h = s / w if w > 0 else 1.0
+
         return np.array([
-            x[0] - w / 2., x[1] - h / 2.,
-            x[0] + w / 2., x[1] + h / 2.
+            cx - w / 2., cy - h / 2.,
+            cx + w / 2., cy + h / 2.
         ]).reshape((1, 4))[0]
 
 
@@ -125,12 +136,12 @@ class SORTTracker:
         # Get predicted locations from existing trackers
         trks = np.zeros((len(self.trackers), 5))
         to_del = []
-        for t, trk in enumerate(trks):
-            pos = self.trackers[t].predict()[0]
+        for t in range(len(self.trackers)):
+            pos = self.trackers[t].predict()  # Returns bbox [x1, y1, x2, y2]
             # Ensure pos is a 1D array
             pos = np.atleast_1d(pos).flatten()
             if len(pos) >= 4:
-                trk[:] = [pos[0], pos[1], pos[2], pos[3], 0]
+                trks[t] = [pos[0], pos[1], pos[2], pos[3], 0]
             if np.any(np.isnan(pos)):
                 to_del.append(t)
                 
@@ -155,7 +166,8 @@ class SORTTracker:
         # Return active tracks
         ret = []
         for trk in self.trackers:
-            if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
+            # More lenient condition for returning tracks
+            if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= 3):
                 d = trk.get_state()
                 ret.append(np.concatenate((d, [trk.id])).reshape(1, -1))
 
