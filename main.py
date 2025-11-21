@@ -90,9 +90,23 @@ class PeopleCounterApp:
         self.logger.info(f"Video initialized - Resolution: {self.frame_width}x{self.frame_height}, FPS: {self.fps}")
         
         # Initialize counter with actual frame dimensions
-        line_coords_norm = self.config['counting_line']['coordinates']
-        line_coords = convert_line_coords(line_coords_norm, self.frame_width, self.frame_height)
-        self.counter = PeopleCounter(self.config, line_coords)
+        # Check if using two-line mode
+        if 'outside_line' in self.config['counting_line'] and 'inside_line' in self.config['counting_line']:
+            # TWO-LINE MODE
+            outside_coords_norm = self.config['counting_line']['outside_line']
+            inside_coords_norm = self.config['counting_line']['inside_line']
+
+            outside_coords = convert_line_coords(outside_coords_norm, self.frame_width, self.frame_height)
+            inside_coords = convert_line_coords(inside_coords_norm, self.frame_width, self.frame_height)
+
+            self.counter = PeopleCounter(self.config, None, outside_coords, inside_coords)
+            self.logger.info("✓ Initialized with TWO-LINE zone system")
+        else:
+            # SINGLE-LINE MODE (legacy)
+            line_coords_norm = self.config['counting_line']['coordinates']
+            line_coords = convert_line_coords(line_coords_norm, self.frame_width, self.frame_height)
+            self.counter = PeopleCounter(self.config, line_coords)
+            self.logger.info("Initialized with single-line mode")
         
         # Initialize video writer if needed
         if self.config['display']['save_output']:
@@ -110,30 +124,84 @@ class PeopleCounterApp:
         """Draw bounding boxes, tracks, and counting line on frame"""
         annotated_frame = frame.copy()
         
-        # Draw counting line
-        line_coords_norm = self.config['counting_line']['coordinates']
-        line_coords = convert_line_coords(line_coords_norm, self.frame_width, self.frame_height)
-        color = tuple(self.config['counting_line']['color'])
-        thickness = self.config['counting_line']['thickness']
+        # Draw counting lines (two-line or single-line mode)
+        if 'outside_line' in self.config['counting_line'] and 'inside_line' in self.config['counting_line']:
+            # TWO-LINE MODE
+            outside_coords_norm = self.config['counting_line']['outside_line']
+            inside_coords_norm = self.config['counting_line']['inside_line']
 
-        cv2.line(annotated_frame,
-                (line_coords[0], line_coords[1]),
-                (line_coords[2], line_coords[3]),
-                color, thickness)
+            outside_coords = convert_line_coords(outside_coords_norm, self.frame_width, self.frame_height)
+            inside_coords = convert_line_coords(inside_coords_norm, self.frame_width, self.frame_height)
 
-        # Draw zone labels
-        # Calculate midpoint of line
-        mid_x = (line_coords[0] + line_coords[2]) // 2
-        mid_y = (line_coords[1] + line_coords[3]) // 2
+            # Draw outside line (blue)
+            cv2.line(annotated_frame,
+                    (outside_coords[0], outside_coords[1]),
+                    (outside_coords[2], outside_coords[3]),
+                    (255, 0, 0), 3)  # Blue for outside
 
-        # For horizontal line with IN=down, outside is above, inside is below
-        if self.config['counting_line']['in_direction'] == 'down':
-            outside_y = mid_y - 40
-            inside_y = mid_y + 40
-            cv2.putText(annotated_frame, "OUTSIDE", (mid_x - 50, outside_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
-            cv2.putText(annotated_frame, "INSIDE", (mid_x - 40, inside_y),
-                       cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+            # Draw inside line (yellow)
+            cv2.line(annotated_frame,
+                    (inside_coords[0], inside_coords[1]),
+                    (inside_coords[2], inside_coords[3]),
+                    (0, 255, 255), 3)  # Yellow for inside
+
+            # Draw transition zone (semi-transparent green)
+            overlay = annotated_frame.copy()
+            if self.config['counting_line']['in_direction'] == 'down':
+                # Horizontal lines
+                outside_y = outside_coords[1]
+                inside_y = inside_coords[1]
+                cv2.rectangle(overlay, (0, outside_y), (self.frame_width, inside_y), (0, 255, 0), -1)
+            cv2.addWeighted(overlay, 0.15, annotated_frame, 0.85, 0, annotated_frame)
+
+            # Draw labels
+            mid_x = self.frame_width // 2
+            outside_y = outside_coords[1]
+            inside_y = inside_coords[1]
+            transition_y = (outside_y + inside_y) // 2
+
+            if self.config['counting_line']['in_direction'] == 'down':
+                # OUTSIDE label (above outside line)
+                cv2.rectangle(annotated_frame, (mid_x - 80, outside_y - 60), (mid_x + 80, outside_y - 25), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "OUTSIDE", (mid_x - 70, outside_y - 35),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+
+                # TRANSITION label (between lines)
+                cv2.rectangle(annotated_frame, (mid_x - 100, transition_y - 15), (mid_x + 100, transition_y + 15), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "TRANSITION", (mid_x - 90, transition_y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+                # INSIDE label (below inside line)
+                cv2.rectangle(annotated_frame, (mid_x - 70, inside_y + 25), (mid_x + 70, inside_y + 60), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "INSIDE", (mid_x - 60, inside_y + 50),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+        else:
+            # SINGLE-LINE MODE (legacy)
+            line_coords_norm = self.config['counting_line']['coordinates']
+            line_coords = convert_line_coords(line_coords_norm, self.frame_width, self.frame_height)
+            color = tuple(self.config['counting_line']['color'])
+            thickness = self.config['counting_line']['thickness']
+
+            cv2.line(annotated_frame,
+                    (line_coords[0], line_coords[1]),
+                    (line_coords[2], line_coords[3]),
+                    color, thickness)
+
+            # Draw zone labels
+            mid_x = (line_coords[0] + line_coords[2]) // 2
+            mid_y = (line_coords[1] + line_coords[3]) // 2
+
+            if self.config['counting_line']['in_direction'] == 'down':
+                outside_y = mid_y - 40
+                inside_y = mid_y + 40
+
+                cv2.rectangle(annotated_frame, (mid_x - 80, outside_y - 30), (mid_x + 80, outside_y + 5), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "OUTSIDE", (mid_x - 70, outside_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+
+                cv2.rectangle(annotated_frame, (mid_x - 70, inside_y - 30), (mid_x + 70, inside_y + 5), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "INSIDE", (mid_x - 60, inside_y),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
         
         # Draw detections
         if self.config['display']['show_detections']:
@@ -152,15 +220,39 @@ class PeopleCounterApp:
                 cx = int((x1 + x2) / 2)
                 cy = int((y1 + y2) / 2)
 
-                # Get zone for this track
+                # Get zone and state for this track
                 zone = self.counter._get_zone((cx, cy))
-                zone_color = (255, 0, 0) if zone == 'outside' else (0, 255, 255)  # Blue for outside, Yellow for inside
+                state_info = self.counter.track_states.get(track_id, {'state': None, 'zone_frames': 0})
+                state = state_info['state']
+                zone_frames = state_info['zone_frames']
+                direction = state_info.get('direction', '')
 
-                # Draw bounding box with zone color
+                # Color based on state (TWO-LINE MODE)
+                if state == 'transition':
+                    if direction == 'entering':
+                        zone_color = (0, 255, 0)  # Green for entering
+                        state_label = f"ENTERING ({zone_frames}f)"
+                    elif direction == 'exiting':
+                        zone_color = (0, 165, 255)  # Orange for exiting
+                        state_label = f"EXITING ({zone_frames}f)"
+                    else:
+                        zone_color = (0, 255, 0)  # Green for transition
+                        state_label = f"transition ({zone_frames}f)"
+                elif state == 'outside':
+                    zone_color = (255, 0, 0)  # Blue for outside
+                    state_label = f"outside ({zone_frames}f)"
+                elif state == 'inside':
+                    zone_color = (0, 255, 255)  # Yellow for inside
+                    state_label = f"inside ({zone_frames}f)"
+                else:
+                    zone_color = (128, 128, 128)  # Gray for unknown
+                    state_label = "initializing"
+
+                # Draw bounding box with state color
                 cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), zone_color, 2)
 
-                # Draw ID and zone
-                cv2.putText(annotated_frame, f"ID: {track_id} ({zone})",
+                # Draw ID and state
+                cv2.putText(annotated_frame, f"ID: {track_id} - {state_label}",
                            (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
                            0.5, zone_color, 2)
 
@@ -172,7 +264,15 @@ class PeopleCounterApp:
                     trail = self.counter.get_track_history(track_id)
                     if len(trail) > 1:
                         points = np.array(trail, dtype=np.int32)
-                        cv2.polylines(annotated_frame, [points], False, (255, 0, 0), 2)
+                        cv2.polylines(annotated_frame, [points], False, zone_color, 2)
+
+                        # Draw arrow showing direction of movement
+                        if len(trail) >= 5:
+                            # Use first and last points to show overall direction
+                            start_point = trail[0]
+                            end_point = trail[-1]
+                            cv2.arrowedLine(annotated_frame, start_point, end_point,
+                                          (0, 255, 0), 2, tipLength=0.3)
         
         # Draw counts
         if self.config['display']['show_counts']:

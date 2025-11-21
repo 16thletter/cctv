@@ -11,34 +11,59 @@ from src.utils import line_intersection, get_direction
 class PeopleCounter:
     """People counter using line crossing detection"""
     
-    def __init__(self, config, line_coords):
+    def __init__(self, config, line_coords, outside_line_coords=None, inside_line_coords=None):
         """
-        Initialize people counter
-        
+        Initialize people counter with TWO-LINE zone system
+
         Args:
             config: Configuration dictionary
-            line_coords: Tuple of (x1, y1, x2, y2) for counting line
+            line_coords: Tuple of (x1, y1, x2, y2) for counting line (legacy single-line mode)
+            outside_line_coords: Tuple of (x1, y1, x2, y2) for outside zone line (two-line mode)
+            inside_line_coords: Tuple of (x1, y1, x2, y2) for inside zone line (two-line mode)
         """
         self.logger = logging.getLogger(__name__)
         self.config = config['counting_line']
-        
-        # Counting line coordinates
-        self.line_start = (line_coords[0], line_coords[1])
-        self.line_end = (line_coords[2], line_coords[3])
 
-        # Calculate door region (center 50% of the line to avoid lateral movements at edges)
-        # This prevents counting people who move laterally inside the room
-        line_length_x = self.line_end[0] - self.line_start[0]
-        line_length_y = self.line_end[1] - self.line_start[1]
+        # TWO-LINE ZONE SYSTEM
+        # If both outside and inside lines are provided, use two-line mode
+        if outside_line_coords is not None and inside_line_coords is not None:
+            self.two_line_mode = True
+            self.outside_line_start = (outside_line_coords[0], outside_line_coords[1])
+            self.outside_line_end = (outside_line_coords[2], outside_line_coords[3])
+            self.inside_line_start = (inside_line_coords[0], inside_line_coords[1])
+            self.inside_line_end = (inside_line_coords[2], inside_line_coords[3])
+
+            # For compatibility, set line_start/end to outside line
+            self.line_start = self.outside_line_start
+            self.line_end = self.outside_line_end
+
+            self.logger.info("✓ Using TWO-LINE zone system for enhanced accuracy")
+        else:
+            # Single line mode (legacy)
+            self.two_line_mode = False
+            self.line_start = (line_coords[0], line_coords[1])
+            self.line_end = (line_coords[2], line_coords[3])
+
+            # Set both lines to same position for compatibility
+            self.outside_line_start = self.line_start
+            self.outside_line_end = self.line_end
+            self.inside_line_start = self.line_start
+            self.inside_line_end = self.line_end
+
+            self.logger.info("Using SINGLE-LINE zone system (legacy mode)")
+
+        # Calculate door region (center 50% of the outside line to avoid lateral movements at edges)
+        line_length_x = self.outside_line_end[0] - self.outside_line_start[0]
+        line_length_y = self.outside_line_end[1] - self.outside_line_start[1]
         margin = 0.25  # 25% margin on each side = center 50%
 
         self.door_start = (
-            self.line_start[0] + line_length_x * margin,
-            self.line_start[1] + line_length_y * margin
+            self.outside_line_start[0] + line_length_x * margin,
+            self.outside_line_start[1] + line_length_y * margin
         )
         self.door_end = (
-            self.line_start[0] + line_length_x * (1 - margin),
-            self.line_start[1] + line_length_y * (1 - margin)
+            self.outside_line_start[0] + line_length_x * (1 - margin),
+            self.outside_line_start[1] + line_length_y * (1 - margin)
         )
 
         # Direction configuration
@@ -58,19 +83,33 @@ class PeopleCounter:
         self.cooldown = defaultdict(int)
         self.cooldown_frames = 50  # Increased to prevent double counting in groups
 
-        # Pending crossings that need confirmation
-        # Format: {track_id: {'type': 'IN'/'OUT', 'direction': 'up'/'down', 'frames': count, 'required_zone': 'inside'/'outside'}}
-        self.pending_crossings = defaultdict(lambda: None)
-        self.confirmation_frames = 5  # Number of frames to confirm crossing (reduced for groups)
+        # Zone-based tracking state machine
+        # Format: {track_id: {'state': 'outside'/'transition'/'inside',
+        #                     'zone_frames': count,
+        #                     'entry_time': frame_number,
+        #                     'direction': 'entering'/'exiting',
+        #                     'origin_zone': 'outside'/'inside' - where the journey started,
+        #                     'zone_history': deque of recent zones for smoothing}}
+        self.track_states = defaultdict(lambda: {
+            'state': None,
+            'zone_frames': 0,
+            'entry_time': 0,
+            'origin_zone': None,
+            'zone_history': deque(maxlen=5)  # Keep last 5 zone detections for smoothing
+        })
 
-        # Track cancellation counts to prevent infinite oscillation
-        self.cancellation_counts = defaultdict(int)
-        self.max_cancellations = 3  # Maximum times a pending crossing can be canceled before giving up
+        # Minimum frames required in each zone before transitioning
+        # CRITICAL: Lower values = more responsive but more noise-sensitive
+        # For multiple people, we need to be more lenient to avoid missing fast movements
+        self.min_zone_frames = 2  # Must be in a zone for 2 frames (0.067s at 30fps)
+
+        # Minimum frames required in transition state before counting
+        self.min_transition_frames = 1  # Must be transitioning for 1 frame (very responsive)
 
         # Recently counted positions to prevent ID swap double counting
         # Format: [(position, timestamp, type), ...]
         self.recent_counts = deque(maxlen=20)  # Keep last 20 counts
-        self.position_threshold = 100  # Pixels - if new track is within this distance, might be ID swap
+        self.position_threshold = 50  # Pixels - if new track is within this distance, might be ID swap (reduced for multiple people)
 
         # Event log
         self.events = []
@@ -78,37 +117,158 @@ class PeopleCounter:
         self.logger.info(f"Counter initialized - Line: {self.line_start} to {self.line_end}")
         self.logger.info(f"Door region (center 50%): {self.door_start} to {self.door_end}")
         self.logger.info(f"IN direction: {self.in_direction}")
+        self.logger.info(f"Using ZONE-BASED tracking: min_zone_frames={self.min_zone_frames}, min_transition_frames={self.min_transition_frames}")
+
+        # Log zone interpretation
+        if self.in_direction == 'down':
+            self.logger.info(f"Zone mapping: ABOVE line (y < {self.line_start[1]}) = OUTSIDE, BELOW line (y > {self.line_start[1]}) = INSIDE")
+        elif self.in_direction == 'up':
+            self.logger.info(f"Zone mapping: ABOVE line (y < {self.line_start[1]}) = INSIDE, BELOW line (y > {self.line_start[1]}) = OUTSIDE")
 
     def _get_zone(self, point):
         """
-        Determine which zone a point is in relative to the counting line.
-        Returns 'inside' if point is on the inside zone, 'outside' if on outside zone.
+        Determine which zone a point is in using TWO-LINE system.
 
-        For horizontal line with IN=down:
-        - Points above line (smaller Y) = outside
-        - Points below line (larger Y) = inside
+        Returns:
+            'outside' - person is in outside zone (beyond outside line)
+            'inside' - person is in inside zone (beyond inside line)
+            'transition' - person is between the two lines (in transition zone)
+
+        For horizontal lines with IN=down:
+        - Above outside line = 'outside'
+        - Between lines = 'transition'
+        - Below inside line = 'inside'
         """
-        # Calculate cross product to determine which side of line
-        line_vec = np.array([self.line_end[0] - self.line_start[0],
-                            self.line_end[1] - self.line_start[1]])
-        point_vec = np.array([point[0] - self.line_start[0],
-                             point[1] - self.line_start[1]])
-        cross = np.cross(line_vec, point_vec)
+        if self.two_line_mode:
+            # TWO-LINE MODE: More accurate zone detection
+            # For horizontal lines (most common case)
+            if abs(self.outside_line_end[0] - self.outside_line_start[0]) > abs(self.outside_line_end[1] - self.outside_line_start[1]):
+                # Horizontal lines - use Y coordinate
+                outside_y = self.outside_line_start[1]
+                inside_y = self.inside_line_start[1]
+                point_y = point[1]
 
-        # For horizontal line (most common case)
-        if abs(line_vec[0]) > abs(line_vec[1]):
-            # Horizontal line: cross < 0 means above, cross > 0 means below
-            if self.in_direction == 'down':
-                # IN is down, so above=outside, below=inside
-                return 'outside' if cross < 0 else 'inside'
-            else:  # IN is up
-                return 'inside' if cross < 0 else 'outside'
+                if self.in_direction == 'down':
+                    # IN is down, so: outside (top) → transition → inside (bottom)
+                    if point_y < outside_y:
+                        return 'outside'
+                    elif point_y > inside_y:
+                        return 'inside'
+                    else:
+                        return 'transition'
+                else:  # IN is up
+                    # IN is up, so: inside (top) → transition → outside (bottom)
+                    if point_y < inside_y:
+                        return 'inside'
+                    elif point_y > outside_y:
+                        return 'outside'
+                    else:
+                        return 'transition'
+            else:
+                # Vertical lines - use X coordinate
+                outside_x = self.outside_line_start[0]
+                inside_x = self.inside_line_start[0]
+                point_x = point[0]
+
+                if self.in_direction == 'right':
+                    if point_x < outside_x:
+                        return 'outside'
+                    elif point_x > inside_x:
+                        return 'inside'
+                    else:
+                        return 'transition'
+                else:  # IN is left
+                    if point_x < inside_x:
+                        return 'inside'
+                    elif point_x > outside_x:
+                        return 'outside'
+                    else:
+                        return 'transition'
         else:
-            # Vertical line: cross < 0 means left, cross > 0 means right
-            if self.in_direction == 'right':
-                return 'outside' if cross < 0 else 'inside'
-            else:  # IN is left
-                return 'inside' if cross < 0 else 'outside'
+            # SINGLE-LINE MODE (legacy): Use buffer zones
+            # For horizontal line (most common case)
+            if abs(self.line_end[0] - self.line_start[0]) > abs(self.line_end[1] - self.line_start[1]):
+                # Horizontal line - use Y coordinate
+                line_y = self.line_start[1]
+                point_y = point[1]
+
+                # Add buffer zone (30 pixels) to prevent oscillation
+                buffer = 30
+
+                if self.in_direction == 'down':
+                    # IN is down, so above=outside, below=inside
+                    if point_y < line_y - buffer:
+                        return 'outside'
+                    elif point_y > line_y + buffer:
+                        return 'inside'
+                    else:
+                        # In buffer zone - treat as transition
+                        return 'transition'
+                else:  # IN is up
+                    if point_y < line_y - buffer:
+                        return 'inside'
+                    elif point_y > line_y + buffer:
+                        return 'outside'
+                    else:
+                        return 'transition'
+            else:
+                # Vertical line - use X coordinate
+                line_x = self.line_start[0]
+                point_x = point[0]
+
+                buffer = 30
+
+                if self.in_direction == 'right':
+                    if point_x < line_x - buffer:
+                        return 'outside'
+                    elif point_x > line_x + buffer:
+                        return 'inside'
+                    else:
+                        return 'transition'
+                else:  # IN is left
+                    if point_x < line_x - buffer:
+                        return 'inside'
+                    elif point_x > line_x + buffer:
+                        return 'outside'
+                    else:
+                        return 'transition'
+
+    def _get_smoothed_zone(self, track_id, raw_zone):
+        """
+        Get smoothed zone using recent history to reduce oscillation.
+        Uses majority voting from recent zone detections.
+
+        CRITICAL for multiple people: Reduces false transitions when people
+        are near zone boundaries or when detection is noisy.
+
+        Args:
+            track_id: Track ID
+            raw_zone: Current detected zone
+
+        Returns:
+            Smoothed zone ('outside', 'transition', or 'inside')
+        """
+        state_info = self.track_states[track_id]
+        zone_history = state_info['zone_history']
+
+        # Add current zone to history
+        zone_history.append(raw_zone)
+
+        # If we don't have enough history, use raw zone
+        if len(zone_history) < 3:
+            return raw_zone
+
+        # Use majority voting from recent history (last 3-5 frames)
+        from collections import Counter
+        zone_counts = Counter(zone_history)
+        most_common_zone, count = zone_counts.most_common(1)[0]
+
+        # Only use smoothed zone if it has clear majority (at least 60%)
+        if count >= len(zone_history) * 0.6:
+            return most_common_zone
+        else:
+            # No clear majority, use current zone
+            return raw_zone
 
     def _is_near_recent_count(self, position, event_type, frame_number):
         """
@@ -158,6 +318,106 @@ class PeopleCounter:
         else:
             return self.door_start[1] <= point[1] <= self.door_end[1]
 
+    def _calculate_perpendicular_distance(self, point, line_start, line_end):
+        """
+        Calculate the perpendicular distance from a point to a line.
+
+        Args:
+            point: (x, y) tuple
+            line_start: (x, y) tuple
+            line_end: (x, y) tuple
+
+        Returns:
+            Distance in pixels
+        """
+        # Convert to numpy arrays
+        p = np.array(point)
+        l1 = np.array(line_start)
+        l2 = np.array(line_end)
+
+        # Calculate perpendicular distance using cross product formula
+        # distance = |cross(line_vec, point_vec)| / |line_vec|
+        line_vec = l2 - l1
+        point_vec = p - l1
+
+        cross = np.cross(line_vec, point_vec)
+        line_length = np.linalg.norm(line_vec)
+
+        if line_length < 1:
+            return 0
+
+        distance = abs(cross) / line_length
+        return distance
+
+    def _is_perpendicular_movement(self, track_id, min_perpendicular_ratio=0.5, min_perpendicular_distance=50):
+        """
+        Check if the track's movement is perpendicular to the counting line.
+        This prevents counting people who are moving parallel to the line (lateral movement).
+
+        Args:
+            track_id: Track ID to check
+            min_perpendicular_ratio: Minimum ratio of perpendicular to parallel movement (default 0.5)
+            min_perpendicular_distance: Minimum distance traveled perpendicular to line in pixels (default 50)
+
+        Returns:
+            True if movement is sufficiently perpendicular to the line
+        """
+        history = self.track_history[track_id]
+        if len(history) < 5:
+            return True  # Not enough data, allow it
+
+        # Get first and last positions
+        start_pos = np.array(history[0])
+        end_pos = np.array(history[-1])
+
+        # Calculate movement vector
+        movement_vec = end_pos - start_pos
+        movement_magnitude = np.linalg.norm(movement_vec)
+
+        if movement_magnitude < 10:  # Very small movement, ignore
+            return False
+
+        # Calculate perpendicular distances from line for start and end positions
+        start_dist = self._calculate_perpendicular_distance(start_pos, self.line_start, self.line_end)
+        end_dist = self._calculate_perpendicular_distance(end_pos, self.line_start, self.line_end)
+
+        # Calculate how much they moved perpendicular to the line
+        perpendicular_distance_traveled = abs(end_dist - start_dist)
+
+        # Check if they traveled enough perpendicular distance
+        if perpendicular_distance_traveled < min_perpendicular_distance:
+            self.logger.debug(f"Track {track_id} only traveled {perpendicular_distance_traveled:.1f}px perpendicular to line (min: {min_perpendicular_distance})")
+            return False
+
+        # Calculate line vector (normalized)
+        line_vec = np.array([self.line_end[0] - self.line_start[0],
+                            self.line_end[1] - self.line_start[1]])
+        line_magnitude = np.linalg.norm(line_vec)
+
+        if line_magnitude < 1:
+            return True
+
+        line_vec_normalized = line_vec / line_magnitude
+        movement_vec_normalized = movement_vec / movement_magnitude
+
+        # Calculate dot product to get parallel component
+        # dot product = cos(angle) * magnitudes
+        # If angle is 0° (parallel), dot = 1
+        # If angle is 90° (perpendicular), dot = 0
+        dot_product = abs(np.dot(line_vec_normalized, movement_vec_normalized))
+
+        # Calculate perpendicular component
+        # If dot_product is close to 1, movement is parallel (bad)
+        # If dot_product is close to 0, movement is perpendicular (good)
+        perpendicular_component = 1 - dot_product
+
+        # Check if movement is sufficiently perpendicular
+        is_perpendicular = perpendicular_component >= min_perpendicular_ratio
+
+        self.logger.debug(f"Track {track_id} movement analysis: parallel={dot_product:.2f}, perpendicular={perpendicular_component:.2f}, perp_dist={perpendicular_distance_traveled:.1f}px, is_perpendicular={is_perpendicular}")
+
+        return is_perpendicular
+
     def _get_overall_movement_direction(self, track_id):
         """
         Analyze the overall movement direction of a track over its history.
@@ -195,40 +455,278 @@ class PeopleCounter:
 
         return None
 
+    def _update_zone_state(self, track_id, raw_zone, centroid, frame_number):
+        """
+        Update the zone-based state machine for a track using TWO-LINE system.
+
+        State transitions (TWO-LINE MODE):
+        - outside → transition → inside (entering)
+        - inside → transition → outside (exiting)
+
+        The 'transition' zone is the physical space between the two lines.
+
+        Returns:
+            event: {'type': 'IN'/'OUT', ...} if a count should be made, None otherwise
+        """
+        # Use smoothed zone to reduce oscillation (CRITICAL for multiple people)
+        current_zone = self._get_smoothed_zone(track_id, raw_zone)
+
+        state_info = self.track_states[track_id]
+        current_state = state_info['state']
+        zone_frames = state_info['zone_frames']
+
+        # Check if centroid is in door region (center 50% of line)
+        in_door_region = self._is_in_door_region(centroid)
+
+        # Initialize state if this is a new track
+        if current_state is None:
+            # Initialize in any zone (including transition)
+            state_info['state'] = current_zone
+            state_info['zone_frames'] = 1
+            state_info['entry_time'] = frame_number
+
+            # If starting in transition, try to infer direction from next frames
+            if current_zone == 'transition':
+                self.logger.debug(f"Track {track_id} initialized in TRANSITION zone - will infer direction")
+            else:
+                self.logger.debug(f"Track {track_id} initialized in {current_zone} zone")
+            return None
+
+        # Same zone - increment counter
+        if current_zone == current_state:
+            state_info['zone_frames'] += 1
+            return None
+
+        # Zone changed - handle transitions
+
+        # Handle tracks that started in transition zone
+        if current_state == 'transition' and state_info.get('direction') is None:
+            # Track started in transition, now moved to a clear zone
+            if current_zone == 'inside':
+                # Moved to inside - was entering
+                state_info['state'] = 'transition'
+                state_info['direction'] = 'entering'
+                state_info['zone_frames'] = 1
+                self.logger.info(f"🟢 Track {track_id}: transition (unknown) → inferred ENTERING direction")
+                print(f"🟢 Track {track_id} inferred ENTERING (transition → inside)")
+                return None
+            elif current_zone == 'outside':
+                # Moved to outside - was exiting
+                state_info['state'] = 'transition'
+                state_info['direction'] = 'exiting'
+                state_info['zone_frames'] = 1
+                self.logger.info(f"🔴 Track {track_id}: transition (unknown) → inferred EXITING direction")
+                print(f"🔴 Track {track_id} inferred EXITING (transition → outside)")
+                return None
+
+        # ENTERING: outside → transition → inside
+        if current_state == 'outside' and current_zone == 'transition':
+            # Entering transition zone from outside
+            if zone_frames >= self.min_zone_frames:
+                state_info['state'] = 'transition'
+                state_info['zone_frames'] = 1
+                state_info['direction'] = 'entering'
+                state_info['origin_zone'] = 'outside'  # Mark where journey started
+                self.logger.info(f"🟢 Track {track_id}: outside ({zone_frames}f) → transition (entering) [origin=outside]")
+                print(f"🟢 Track {track_id} started ENTERING (outside → transition)")
+            else:
+                self.logger.debug(f"Track {track_id}: unstable outside ({zone_frames}f < {self.min_zone_frames}), waiting")
+                state_info['zone_frames'] += 1
+            return None
+
+        elif current_state == 'transition' and current_zone == 'inside':
+            # Completed entry: transition → inside
+            origin = state_info.get('origin_zone')
+            direction = state_info.get('direction')
+
+            # ONLY count if direction is 'entering' AND origin was 'outside'
+            if direction == 'entering' and origin == 'outside':
+                # Check for ID swap
+                if self._is_near_recent_count(centroid, 'IN', frame_number):
+                    self.logger.info(f"Track {track_id} near recent IN count - likely ID swap, ignoring")
+                    state_info['state'] = 'inside'
+                    state_info['zone_frames'] = 1
+                    state_info['origin_zone'] = None
+                    self.counted_ids.add(track_id)
+                    return None
+
+                # Count as IN - complete journey from outside → transition → inside
+                self.count_in += 1
+                self.logger.info(f"🟢 ✓ Person IN - ID: {track_id}, Total IN: {self.count_in} 🟢")
+                print(f"\n{'='*60}")
+                print(f"🟢 IN COUNT INCREMENTED! Track {track_id}")
+                print(f"🟢 Journey: outside → transition → inside ✓")
+                print(f"🟢 Total IN: {self.count_in}")
+                print(f"🟢 Total OUT: {self.count_out}")
+                print(f"🟢 Occupancy: {self.count_in - self.count_out}")
+                print(f"{'='*60}\n")
+
+                # Mark as counted
+                self.counted_ids.add(track_id)
+                self.recent_counts.append((centroid, frame_number, 'IN'))
+
+                # Update state
+                state_info['state'] = 'inside'
+                state_info['zone_frames'] = 1
+                state_info['origin_zone'] = None  # Clear origin
+
+                # Create event
+                event = {
+                    'timestamp': datetime.now(),
+                    'track_id': track_id,
+                    'type': 'IN',
+                    'frame': frame_number,
+                    'position': centroid,
+                    'count_in': self.count_in,
+                    'count_out': self.count_out,
+                    'occupancy': self.count_in - self.count_out
+                }
+                return event
+            else:
+                # Either wrong direction or wrong origin - don't count
+                if direction != 'entering':
+                    self.logger.info(f"❌ Track {track_id}: transition→inside but direction={direction}, NOT counting")
+                elif origin != 'outside':
+                    self.logger.info(f"❌ Track {track_id}: transition→inside but origin={origin} (not outside), NOT counting")
+                    print(f"❌ Track {track_id} moved inside→transition→inside (hovering), NOT counted")
+
+                state_info['state'] = 'inside'
+                state_info['zone_frames'] = 1
+                state_info['origin_zone'] = None
+                return None
+
+        # EXITING: inside → transition → outside
+        elif current_state == 'inside' and current_zone == 'transition':
+            # Entering transition zone from inside
+            self.logger.debug(f"Track {track_id}: inside→transition, zone_frames={zone_frames}, min={self.min_zone_frames}, centroid={centroid}")
+
+            # Be more lenient for exits - don't require door region check
+            if zone_frames >= self.min_zone_frames:
+                state_info['state'] = 'transition'
+                state_info['zone_frames'] = 1
+                state_info['direction'] = 'exiting'
+                state_info['origin_zone'] = 'inside'  # Mark where journey started
+                self.logger.info(f"🔴 Track {track_id}: inside ({zone_frames}f) → transition (exiting) [origin=inside], centroid={centroid}")
+                print(f"🔴 Track {track_id} started EXITING (inside → transition)")
+            else:
+                self.logger.debug(f"Track {track_id}: unstable inside ({zone_frames}f < {self.min_zone_frames}), waiting")
+                state_info['zone_frames'] += 1
+            return None
+
+        elif current_state == 'transition' and current_zone == 'outside':
+            # Completed exit: transition → outside
+            origin = state_info.get('origin_zone')
+            direction = state_info.get('direction')
+            self.logger.debug(f"Track {track_id}: transition→outside, direction={direction}, origin={origin}")
+
+            # ONLY count if direction is 'exiting' AND origin was 'inside'
+            if direction == 'exiting' and origin == 'inside':
+                # Check for ID swap
+                if self._is_near_recent_count(centroid, 'OUT', frame_number):
+                    self.logger.info(f"Track {track_id} near recent OUT count - likely ID swap, ignoring")
+                    state_info['state'] = 'outside'
+                    state_info['zone_frames'] = 1
+                    state_info['origin_zone'] = None
+                    self.counted_ids.add(track_id)
+                    return None
+
+                # Count as OUT - complete journey from inside → transition → outside
+                self.count_out += 1
+                self.logger.info(f"🔴 ✓ Person OUT - ID: {track_id}, Total OUT: {self.count_out} 🔴")
+                print(f"\n{'='*60}")
+                print(f"🔴 OUT COUNT INCREMENTED! Track {track_id}")
+                print(f"🔴 Journey: inside → transition → outside ✓")
+                print(f"🔴 Total OUT: {self.count_out}")
+                print(f"🔴 Total IN: {self.count_in}")
+                print(f"🔴 Occupancy: {self.count_in - self.count_out}")
+                print(f"{'='*60}\n")
+
+                # Mark as counted
+                self.counted_ids.add(track_id)
+                self.recent_counts.append((centroid, frame_number, 'OUT'))
+
+                # Update state
+                state_info['state'] = 'outside'
+                state_info['zone_frames'] = 1
+                state_info['origin_zone'] = None  # Clear origin
+
+                # Create event
+                event = {
+                    'timestamp': datetime.now(),
+                    'track_id': track_id,
+                    'type': 'OUT',
+                    'frame': frame_number,
+                    'position': centroid,
+                    'count_in': self.count_in,
+                    'count_out': self.count_out,
+                    'occupancy': self.count_in - self.count_out
+                }
+                return event
+            else:
+                # Either wrong direction or wrong origin - don't count
+                if direction != 'exiting':
+                    self.logger.info(f"❌ Track {track_id}: transition→outside but direction={direction}, NOT counting")
+                elif origin != 'inside':
+                    self.logger.info(f"❌ Track {track_id}: transition→outside but origin={origin} (not inside), NOT counting")
+                    print(f"❌ Track {track_id} moved outside→transition→outside (hovering), NOT counted")
+
+                state_info['state'] = 'outside'
+                state_info['zone_frames'] = 1
+                state_info['origin_zone'] = None
+                return None
+
+        # Handle backward movement for entering (transition → inside when was exiting)
+        elif current_state == 'transition' and current_zone == 'inside':
+            if state_info.get('direction') == 'exiting':
+                self.logger.info(f"Track {track_id}: transition (exiting) → inside (moved back, canceled)")
+                state_info['state'] = 'inside'
+                state_info['zone_frames'] = 1
+                return None
+            else:
+                # This is handled above in the entering logic
+                self.logger.debug(f"Track {track_id}: transition→inside (unexpected state)")
+                state_info['state'] = 'inside'
+                state_info['zone_frames'] = 1
+                return None
+
+        # Other transitions - reset
+        else:
+            self.logger.debug(f"Track {track_id}: {current_state} → {current_zone} (unexpected, resetting)")
+            state_info['state'] = current_zone if current_zone != 'transition' else current_state
+            state_info['zone_frames'] = 1
+            return None
+
     def update(self, tracks, frame_number):
         """
-        Update counter with new tracks
-        
+        Update counter with new tracks using ZONE-BASED state machine.
+
         Args:
             tracks: Array of tracks [[x1,y1,x2,y2,track_id], ...]
             frame_number: Current frame number
-            
+
         Returns:
             events: List of new counting events
         """
         new_events = []
-        
+
         # Get current active track IDs
         active_track_ids = set([int(track[4]) for track in tracks])
 
-        # Update cooldowns
-        for track_id in list(self.cooldown.keys()):
-            self.cooldown[track_id] -= 1
-            if self.cooldown[track_id] <= 0:
-                del self.cooldown[track_id]
-                if track_id in self.counted_ids:
-                    self.counted_ids.remove(track_id)
+        # Log when multiple people are being tracked
+        if len(active_track_ids) > 1:
+            self.logger.debug(f"📊 Tracking {len(active_track_ids)} people simultaneously: {sorted(active_track_ids)}")
+            print(f"\n{'='*70}")
+            print(f"📊 MULTIPLE PEOPLE: Tracking {len(active_track_ids)} people: {sorted(active_track_ids)}")
+            print(f"{'='*70}")
 
-        # Clean up pending crossings for inactive tracks
-        for track_id in list(self.pending_crossings.keys()):
+        # Clean up state for inactive tracks
+        for track_id in list(self.track_states.keys()):
             if track_id not in active_track_ids:
-                if self.pending_crossings[track_id] is not None:
-                    self.logger.debug(f"Track {track_id} lost, canceling pending crossing")
-                    self.pending_crossings[track_id] = None
-                if track_id in self.cancellation_counts:
-                    del self.cancellation_counts[track_id]
+                if self.track_states[track_id]['state'] is not None:
+                    self.logger.debug(f"Track {track_id} lost, cleaning up state")
+                    del self.track_states[track_id]
 
-        # Process each track
+        # Process each track using zone-based state machine
         for track in tracks:
             x1, y1, x2, y2, track_id = track
             track_id = int(track_id)
@@ -244,138 +742,39 @@ class PeopleCounter:
             # Get current zone
             current_zone = self._get_zone(centroid)
 
-            # Check if there's a pending crossing for this track
-            if self.pending_crossings[track_id] is not None:
-                pending = self.pending_crossings[track_id]
+            # Log current state for debugging
+            state_info = self.track_states[track_id]
+            current_state = state_info.get('state') or 'none'
+            direction = state_info.get('direction') or 'none'
+            origin = state_info.get('origin_zone') or 'none'
+            zone_frames = state_info.get('zone_frames', 0)
 
-                # Check if person is still in the required zone
-                if current_zone == pending['required_zone']:
-                    # Still in correct zone, increment confirmation frames
-                    pending['frames'] += 1
-                    self.logger.debug(f"Track {track_id} in {current_zone} zone, pending {pending['type']} confirmation: {pending['frames']}/{self.confirmation_frames}")
+            # Show detailed info for each person when multiple people present
+            if len(active_track_ids) > 1:
+                print(f"  👤 Track {track_id}: zone={current_zone:10s} | state={current_state:10s} | dir={direction:8s} | origin={origin:7s} | frames={zone_frames}")
 
-                    # Check if we have enough confirmation frames
-                    if pending['frames'] >= self.confirmation_frames:
-                        # Validate with overall movement direction
-                        overall_direction = self._get_overall_movement_direction(track_id)
+            self.logger.debug(f"Track {track_id}: zone={current_zone}, state={current_state}, dir={direction}, origin={origin}, frames={zone_frames}, pos=({cx},{cy})")
 
-                        # If overall direction contradicts the pending type, cancel it
-                        if overall_direction is not None and overall_direction != pending['type']:
-                            self.logger.info(f"Track {track_id} pending {pending['type']} contradicts overall movement {overall_direction}, canceling")
-                            self.pending_crossings[track_id] = None
-                            self.counted_ids.add(track_id)  # Mark as counted to prevent retry
-                            self.cooldown[track_id] = self.cooldown_frames
-                        # Check if this position is too close to a recent count (ID swap detection)
-                        elif self._is_near_recent_count(centroid, pending['type'], frame_number):
-                            self.logger.info(f"Track {track_id} near recent {pending['type']} count - likely ID swap, ignoring")
-                            self.pending_crossings[track_id] = None
-                            self.counted_ids.add(track_id)  # Mark as counted to prevent retry
-                            self.cooldown[track_id] = self.cooldown_frames
-                        else:
-                            # Confirmed! Count the crossing
-                            if pending['type'] == 'IN':
-                                self.count_in += 1
-                                self.logger.info(f"Person IN (confirmed) - ID: {track_id}, Direction: {pending['direction']}, Total IN: {self.count_in}")
-                            else:
-                                self.count_out += 1
-                                self.logger.info(f"Person OUT (confirmed) - ID: {track_id}, Direction: {pending['direction']}, Total OUT: {self.count_out}")
+            # Update zone-based state machine
+            event = self._update_zone_state(track_id, current_zone, centroid, frame_number)
 
-                            # Mark as counted
-                            self.counted_ids.add(track_id)
-                            self.cooldown[track_id] = self.cooldown_frames
-                            self.cancellation_counts[track_id] = 0  # Reset cancellation count
+            if event:
+                new_events.append(event)
+                self.events.append(event)
+                print(f"📊 Event created: {event['type']} for track {track_id}")
 
-                            # Record this count position
-                            self.recent_counts.append((centroid, frame_number, pending['type']))
-
-                            # Create event
-                            event = {
-                                'timestamp': datetime.now(),
-                                'track_id': track_id,
-                                'type': pending['type'],
-                                'frame': frame_number,
-                                'position': centroid,
-                                'count_in': self.count_in,
-                                'count_out': self.count_out,
-                                'occupancy': self.count_in - self.count_out
-                            }
-                            new_events.append(event)
-                            self.events.append(event)
-
-                            # Clear pending
-                            self.pending_crossings[track_id] = None
-                else:
-                    # Person moved back to wrong zone - cancel the crossing
-                    self.cancellation_counts[track_id] += 1
-                    self.logger.info(f"Track {track_id} moved back to {current_zone}, canceling {pending['type']} crossing (was in {pending['required_zone']} zone, centroid: {centroid}, cancellations: {self.cancellation_counts[track_id]})")
-
-                    # If canceled too many times, mark as counted to prevent infinite oscillation
-                    if self.cancellation_counts[track_id] >= self.max_cancellations:
-                        self.logger.info(f"Track {track_id} canceled {self.cancellation_counts[track_id]} times, marking as counted to prevent oscillation")
-                        self.counted_ids.add(track_id)
-                        self.cooldown[track_id] = self.cooldown_frames
-                        self.cancellation_counts[track_id] = 0
-
-                    self.pending_crossings[track_id] = None
-
-                # Skip further processing for this track
-                continue
-
-            # Need at least 2 points to check for crossing
-            if len(self.track_history[track_id]) < 2:
-                continue
-
-            # Check if already counted recently
-            if track_id in self.counted_ids:
-                continue
-
-            # Get previous and current position
-            prev_pos = self.track_history[track_id][-2]
-            curr_pos = self.track_history[track_id][-1]
-
-            # Check for line crossing and get intersection point
-            intersects, intersection_point = line_intersection(
-                prev_pos, curr_pos, self.line_start, self.line_end, return_point=True
-            )
-
-            if intersects:
-                # Check if crossing is within door region (not lateral movement at edges)
-                if not self._is_in_door_region(intersection_point):
-                    self.logger.debug(f"Track {track_id} crossed line outside door region at {intersection_point}, ignoring")
-                    continue
-
-                # Determine direction
-                direction = get_direction(prev_pos, curr_pos, self.line_start, self.line_end)
-
+        # Log summary if multiple people or events occurred
+        if len(active_track_ids) > 1 or new_events:
+            states_summary = []
+            for tid in sorted(active_track_ids):
+                state = self.track_states[tid].get('state', 'unknown')
+                direction = self.track_states[tid].get('direction', '')
                 if direction:
-                    # Get zones for debugging
-                    from_zone = self._get_zone(prev_pos)
-                    to_zone = self._get_zone(curr_pos)
+                    states_summary.append(f"{tid}:{state}({direction})")
+                else:
+                    states_summary.append(f"{tid}:{state}")
+            self.logger.debug(f"Frame {frame_number} summary: {', '.join(states_summary)} | IN:{self.count_in} OUT:{self.count_out}")
 
-                    # IMPORTANT: Use zone transition to determine IN/OUT, not just direction!
-                    # This handles lateral movements correctly
-                    if from_zone == 'outside' and to_zone == 'inside':
-                        # Moving from outside to inside = IN
-                        event_type = "IN"
-                        required_zone = "inside"
-                    elif from_zone == 'inside' and to_zone == 'outside':
-                        # Moving from inside to outside = OUT
-                        event_type = "OUT"
-                        required_zone = "outside"
-                    else:
-                        # Same zone to same zone - shouldn't happen, but ignore
-                        self.logger.debug(f"Track {track_id} crossed line but stayed in same zone ({from_zone}->{to_zone}), ignoring")
-                        continue
-
-                    # Create pending crossing - needs confirmation
-                    self.pending_crossings[track_id] = {
-                        'type': event_type,
-                        'direction': direction,
-                        'frames': 1,  # Start with 1 frame
-                        'required_zone': required_zone
-                    }
-                    self.logger.info(f"Track {track_id} crossed line {direction} ({from_zone}->{to_zone}), pending {event_type} (needs {self.confirmation_frames} frames in {required_zone} zone) - prev_pos: {prev_pos}, curr_pos: {curr_pos}")
-        
         return new_events
     
     def get_counts(self):
@@ -395,10 +794,8 @@ class PeopleCounter:
         self.count_in = 0
         self.count_out = 0
         self.counted_ids.clear()
-        self.cooldown.clear()
         self.track_history.clear()
-        self.pending_crossings.clear()
-        self.cancellation_counts.clear()
+        self.track_states.clear()
         self.events.clear()
         self.logger.info("Counter reset")
 
