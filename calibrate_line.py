@@ -5,6 +5,11 @@ import cv2
 import numpy as np
 import yaml
 import sys
+import os
+
+# Add src directory to path to import utils
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+from utils import load_config
 
 # Global variables for mouse callback
 drawing = False
@@ -152,14 +157,18 @@ def calibrate_line(source=0):
 
 
 if __name__ == "__main__":
-    source = 0
-    
+    # Load config to get camera source (with environment variable support)
+    config = load_config('config/config.yaml')
+    source = config['camera']['source']
+
+    # Allow command line override
     if len(sys.argv) > 1:
         source = sys.argv[1]
         try:
             source = int(source)
         except ValueError:
             pass
-    
+
+    print(f"Using camera source: {source}")
     calibrate_line(source)
 

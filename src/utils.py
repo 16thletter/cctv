@@ -21,7 +21,25 @@ def load_config(config_path="config/config.yaml"):
     # Override camera source with environment variable if set
     rtsp_url = os.getenv('RTSP_URL')
     if rtsp_url:
-        config['camera']['source'] = rtsp_url
+        # Convert "0" string to integer for webcam
+        if rtsp_url == "0":
+            config['camera']['source'] = 0
+        else:
+            config['camera']['source'] = rtsp_url
+
+    # Override database path if set
+    db_path = os.getenv('DB_PATH')
+    if db_path:
+        config['database']['path'] = db_path
+
+    # Override logging configuration if set
+    log_level = os.getenv('LOG_LEVEL')
+    if log_level:
+        config['logging']['level'] = log_level.upper()
+
+    log_file = os.getenv('LOG_FILE')
+    if log_file:
+        config['logging']['file'] = log_file
 
     return config
 

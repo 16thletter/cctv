@@ -6,22 +6,23 @@ Helps you determine the correct IN direction for your camera setup
 import cv2
 import yaml
 from pathlib import Path
+import sys
+import os
 
-def load_config():
-    """Load configuration"""
-    with open('config/config.yaml', 'r') as f:
-        return yaml.safe_load(f)
+# Add src directory to path to import utils
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'src'))
+from utils import load_config as load_config_with_env
 
 def main():
     print("=" * 60)
     print("DIRECTION CALIBRATION TOOL")
     print("=" * 60)
     print()
-    
-    # Load config
-    config = load_config()
+
+    # Load config (with environment variable support)
+    config = load_config_with_env('config/config.yaml')
     source = config['camera']['source']
-    
+
     print(f"Connecting to: {source}")
     cap = cv2.VideoCapture(source)
     
