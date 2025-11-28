@@ -6,9 +6,9 @@ camera:
 counting_line:
   outside_line:
   - 0.2
-  - 0.5
+  - 0.51
   - 0.8
-  - 0.5
+  - 0.51
   inside_line:
   - 0.2
   - 0.5800000000000001
@@ -57,5 +57,5 @@ processing:
   skip_frames: 2
 tracking:
   iou_threshold: 0.2
-  max_age: 40
+  max_age: 60  # Increased from 40 to handle more missed frames (2 seconds at 30fps)
   min_hits: 1

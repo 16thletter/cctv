@@ -106,6 +106,9 @@ class PeopleCounter:
         # Minimum frames required in transition state before counting
         self.min_transition_frames = 1  # Must be transitioning for 1 frame (very responsive)
 
+        # For zone skipping (fast movement), use even lower threshold
+        self.min_zone_frames_for_skip = 1  # Only 1 frame needed for zone skip detection
+
         # Recently counted positions to prevent ID swap double counting
         # Format: [(position, timestamp, type), ...]
         self.recent_counts = deque(maxlen=20)  # Keep last 20 counts
@@ -528,7 +531,7 @@ class PeopleCounter:
                 state_info['direction'] = 'entering'
                 state_info['origin_zone'] = 'outside'  # Mark where journey started
                 self.logger.info(f"🟢 Track {track_id}: outside ({zone_frames}f) → transition (entering) [origin=outside]")
-                print(f"🟢 Track {track_id} started ENTERING (outside → transition)")
+                print(f"🟢 Track {track_id} started ENTERING (outside → transition) - must reach inside to count")
             else:
                 self.logger.debug(f"Track {track_id}: unstable outside ({zone_frames}f < {self.min_zone_frames}), waiting")
                 state_info['zone_frames'] += 1
@@ -607,7 +610,7 @@ class PeopleCounter:
                 state_info['direction'] = 'exiting'
                 state_info['origin_zone'] = 'inside'  # Mark where journey started
                 self.logger.info(f"🔴 Track {track_id}: inside ({zone_frames}f) → transition (exiting) [origin=inside], centroid={centroid}")
-                print(f"🔴 Track {track_id} started EXITING (inside → transition)")
+                print(f"🔴 Track {track_id} started EXITING (inside → transition) - must reach outside to count")
             else:
                 self.logger.debug(f"Track {track_id}: unstable inside ({zone_frames}f < {self.min_zone_frames}), waiting")
                 state_info['zone_frames'] += 1
@@ -675,18 +678,140 @@ class PeopleCounter:
                 state_info['origin_zone'] = None
                 return None
 
-        # Handle backward movement for entering (transition → inside when was exiting)
+        # Handle backward movement (person changed their mind)
         elif current_state == 'transition' and current_zone == 'inside':
             if state_info.get('direction') == 'exiting':
-                self.logger.info(f"Track {track_id}: transition (exiting) → inside (moved back, canceled)")
+                # Person was exiting but moved back inside - cancel the exit
+                self.logger.info(f"❌ Track {track_id}: transition (exiting) → inside (moved back, EXIT CANCELED)")
+                print(f"❌ Track {track_id} was exiting but moved back inside - EXIT CANCELED")
                 state_info['state'] = 'inside'
                 state_info['zone_frames'] = 1
+                state_info['direction'] = None  # Clear direction
+                state_info['origin_zone'] = None  # Clear origin
                 return None
             else:
                 # This is handled above in the entering logic
                 self.logger.debug(f"Track {track_id}: transition→inside (unexpected state)")
                 state_info['state'] = 'inside'
                 state_info['zone_frames'] = 1
+                return None
+
+        # Handle backward movement for exiting (transition → outside when was entering)
+        elif current_state == 'transition' and current_zone == 'outside':
+            if state_info.get('direction') == 'entering':
+                # Person was entering but moved back outside - cancel the entry
+                self.logger.info(f"❌ Track {track_id}: transition (entering) → outside (moved back, ENTRY CANCELED)")
+                print(f"❌ Track {track_id} was entering but moved back outside - ENTRY CANCELED")
+                state_info['state'] = 'outside'
+                state_info['zone_frames'] = 1
+                state_info['direction'] = None  # Clear direction
+                state_info['origin_zone'] = None  # Clear origin
+                return None
+
+        # ZONE SKIPPING: Handle missed frames (person jumped zones)
+        # This is CRITICAL for not losing counts when frames are dropped
+
+        # Case 1: outside → inside (skipped transition) = ENTERING
+        elif current_state == 'outside' and current_zone == 'inside':
+            # Person jumped from outside to inside (missed transition zone)
+            # This happens when frames are dropped or person moves very fast
+            # Use lower threshold for zone skips to catch fast movements
+            if zone_frames >= self.min_zone_frames_for_skip:
+                # Check for ID swap
+                if self._is_near_recent_count(centroid, 'IN', frame_number):
+                    self.logger.info(f"Track {track_id} near recent IN count - likely ID swap, ignoring")
+                    state_info['state'] = 'inside'
+                    state_info['zone_frames'] = 1
+                    self.counted_ids.add(track_id)
+                    return None
+
+                # Count as IN - person clearly entered
+                self.count_in += 1
+                self.logger.info(f"🟢 ✓ Person IN (FAST) - ID: {track_id}, Total IN: {self.count_in} 🟢")
+                print(f"\n{'='*60}")
+                print(f"🟢 IN COUNT INCREMENTED! Track {track_id} (ZONE SKIP)")
+                print(f"🟢 Journey: outside → inside (skipped transition - fast movement)")
+                print(f"🟢 Total IN: {self.count_in}")
+                print(f"🟢 Total OUT: {self.count_out}")
+                print(f"🟢 Occupancy: {self.count_in - self.count_out}")
+                print(f"{'='*60}\n")
+
+                # Mark as counted
+                self.counted_ids.add(track_id)
+                self.recent_counts.append((centroid, frame_number, 'IN'))
+
+                # Update state
+                state_info['state'] = 'inside'
+                state_info['zone_frames'] = 1
+                state_info['origin_zone'] = None
+
+                # Create event
+                event = {
+                    'timestamp': datetime.now(),
+                    'track_id': track_id,
+                    'type': 'IN',
+                    'frame': frame_number,
+                    'position': centroid,
+                    'count_in': self.count_in,
+                    'count_out': self.count_out,
+                    'occupancy': self.count_in - self.count_out,
+                    'zone_skip': True  # Flag for debugging
+                }
+                return event
+            else:
+                self.logger.debug(f"Track {track_id}: unstable outside ({zone_frames}f < {self.min_zone_frames}), waiting")
+                state_info['zone_frames'] += 1
+                return None
+
+        # Case 2: inside → outside (skipped transition) = EXITING
+        elif current_state == 'inside' and current_zone == 'outside':
+            # Person jumped from inside to outside (missed transition zone)
+            # Use lower threshold for zone skips to catch fast movements
+            if zone_frames >= self.min_zone_frames_for_skip:
+                # Check for ID swap
+                if self._is_near_recent_count(centroid, 'OUT', frame_number):
+                    self.logger.info(f"Track {track_id} near recent OUT count - likely ID swap, ignoring")
+                    state_info['state'] = 'outside'
+                    state_info['zone_frames'] = 1
+                    self.counted_ids.add(track_id)
+                    return None
+
+                # Count as OUT - person clearly exited
+                self.count_out += 1
+                self.logger.info(f"🔴 ✓ Person OUT (FAST) - ID: {track_id}, Total OUT: {self.count_out} 🔴")
+                print(f"\n{'='*60}")
+                print(f"🔴 OUT COUNT INCREMENTED! Track {track_id} (ZONE SKIP)")
+                print(f"🔴 Journey: inside → outside (skipped transition - fast movement)")
+                print(f"🔴 Total OUT: {self.count_out}")
+                print(f"🔴 Total IN: {self.count_in}")
+                print(f"🔴 Occupancy: {self.count_in - self.count_out}")
+                print(f"{'='*60}\n")
+
+                # Mark as counted
+                self.counted_ids.add(track_id)
+                self.recent_counts.append((centroid, frame_number, 'OUT'))
+
+                # Update state
+                state_info['state'] = 'outside'
+                state_info['zone_frames'] = 1
+                state_info['origin_zone'] = None
+
+                # Create event
+                event = {
+                    'timestamp': datetime.now(),
+                    'track_id': track_id,
+                    'type': 'OUT',
+                    'frame': frame_number,
+                    'position': centroid,
+                    'count_in': self.count_in,
+                    'count_out': self.count_out,
+                    'occupancy': self.count_in - self.count_out,
+                    'zone_skip': True  # Flag for debugging
+                }
+                return event
+            else:
+                self.logger.debug(f"Track {track_id}: unstable inside ({zone_frames}f < {self.min_zone_frames}), waiting")
+                state_info['zone_frames'] += 1
                 return None
 
         # Other transitions - reset
