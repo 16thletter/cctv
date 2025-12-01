@@ -5,15 +5,15 @@ camera:
   fps: 30
 counting_line:
   outside_line:
-  - 0.2
-  - 0.5
-  - 0.8
-  - 0.5
+  - 0.35  # Left edge of door (35% from left)
+  - 0.52  # Y position (52% from top)
+  - 0.65  # Right edge of door (65% from left)
+  - 0.52  # Y position (same as start - horizontal line)
   inside_line:
-  - 0.2
-  - 0.5800000000000001
-  - 0.8
-  - 0.5800000000000001
+  - 0.35  # Must match outside_line X coordinates
+  - 0.58  # Y position (58% from top) - Original transition zone (6% gap)
+  - 0.65  # Must match outside_line X coordinates
+  - 0.58  # Y position (same as start - horizontal line)
   color:
   - 0
   - 255
@@ -29,7 +29,7 @@ database:
 detection:
   classes:
   - 0
-  confidence: 0.4
+  confidence: 0.3  # Lowered from 0.4 to detect people further away (outside zone)
   device: cpu
   imgsz: 480
   model: yolov8n.pt
@@ -56,6 +56,10 @@ processing:
   roi_enabled: false
   skip_frames: 2
 tracking:
-  iou_threshold: 0.2
-  max_age: 40
+  iou_threshold: 0.3  # Increased for better multi-person matching
+  max_age: 90  # Increased from 60 to keep tracks longer (3 seconds at 30fps)
   min_hits: 1
+  track_high_thresh: 0.4  # Lowered from 0.5 to detect people further away
+  track_low_thresh: 0.05  # Lowered from 0.1 for better recovery
+  new_track_thresh: 0.4  # Lowered from 0.5 to create tracks more easily
+  track_buffer: 45  # Increased from 30 to recover lost tracks longer
