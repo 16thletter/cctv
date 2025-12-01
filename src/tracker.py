@@ -1,5 +1,13 @@
 """
-Object Tracking Module using SORT (Simple Online and Realtime Tracking)
+Object Tracking Module using ByteTrack
+ByteTrack: Multi-Object Tracking by Associating Every Detection Box
+Paper: https://arxiv.org/abs/2110.06864
+
+ByteTrack improves upon SORT by:
+1. Using both high and low confidence detections
+2. Better handling of occlusions and missed frames
+3. More stable track IDs in crowded scenes
+4. Two-stage association (high-conf first, then low-conf)
 """
 import logging
 import numpy as np
@@ -46,6 +54,12 @@ class KalmanBoxTracker:
         self.hits = 0
         self.hit_streak = 0
         self.age = 0
+
+        # ByteTrack specific attributes
+        self.state = 'new'  # 'new', 'tracked', 'lost', 'removed'
+        self.is_activated = False
+        self.frame_id = 0
+        self.start_frame = 0
         
     def update(self, bbox):
         """Update tracker with new detection"""
@@ -70,6 +84,27 @@ class KalmanBoxTracker:
     def get_state(self):
         """Return current bounding box estimate"""
         return self._convert_x_to_bbox(self.kf.x)
+
+    def activate(self, frame_id):
+        """Activate a new track (ByteTrack)"""
+        self.is_activated = True
+        self.state = 'tracked'
+        self.frame_id = frame_id
+        self.start_frame = frame_id
+
+    def reactivate(self, new_det):
+        """Reactivate a lost track (ByteTrack)"""
+        if new_det is not None:
+            self.kf.update(self._convert_bbox_to_z(new_det))
+        self.state = 'tracked'
+        self.is_activated = True
+        self.time_since_update = 0
+        self.hits += 1
+        self.hit_streak += 1
+
+    def mark_lost(self):
+        """Mark track as lost (ByteTrack)"""
+        self.state = 'lost'
         
     @staticmethod
     def _convert_bbox_to_z(bbox):
@@ -104,79 +139,225 @@ class KalmanBoxTracker:
         ]).reshape((1, 4))[0]
 
 
-class SORTTracker:
-    """SORT tracker for multiple objects"""
-    
+class ByteTracker:
+    """
+    ByteTrack: Multi-Object Tracking with Two-Stage Association
+
+    Improvements over SORT:
+    - Uses both high and low confidence detections
+    - Two-stage matching: high-conf first, then low-conf for recovery
+    - Better handling of occlusions and missed frames
+    - More stable track IDs in crowded scenes
+    """
+
     def __init__(self, config):
-        """Initialize SORT tracker"""
+        """Initialize ByteTrack tracker"""
         self.logger = logging.getLogger(__name__)
         self.config = config['tracking']
-        
-        self.max_age = self.config['max_age']
-        self.min_hits = self.config['min_hits']
-        self.iou_threshold = self.config['iou_threshold']
-        
-        self.trackers = []
+
+        # Core tracking parameters
+        self.max_age = self.config.get('max_age', 60)
+        self.min_hits = self.config.get('min_hits', 1)
+        self.iou_threshold = self.config.get('iou_threshold', 0.2)
+
+        # ByteTrack specific parameters
+        self.track_high_thresh = self.config.get('track_high_thresh', 0.6)  # High confidence threshold
+        self.track_low_thresh = self.config.get('track_low_thresh', 0.1)   # Low confidence threshold
+        self.new_track_thresh = self.config.get('new_track_thresh', 0.7)   # New track creation threshold
+        self.track_buffer = self.config.get('track_buffer', 30)            # Track buffer frames
+
+        self.tracked_tracks = []  # Active tracks (high confidence)
+        self.lost_tracks = []     # Lost tracks (low confidence, being recovered)
+        self.removed_tracks = []  # Removed tracks (dead)
+
         self.frame_count = 0
-        
-        self.logger.info(f"SORT Tracker initialized - Max age: {self.max_age}, Min hits: {self.min_hits}")
+
+        self.logger.info(f"🚀 ByteTrack initialized - Max age: {self.max_age}, Min hits: {self.min_hits}")
+        self.logger.info(f"   High thresh: {self.track_high_thresh}, Low thresh: {self.track_low_thresh}, New track: {self.new_track_thresh}")
+        self.logger.info(f"   Track buffer: {self.track_buffer}, IOU threshold: {self.iou_threshold}")
         
     def update(self, detections):
         """
-        Update tracker with new detections
-        
+        Update tracker with new detections using ByteTrack's two-stage association
+
         Args:
-            detections: List of detections [[x1,y1,x2,y2,score], ...]
-            
+            detections: Array of detections [[x1,y1,x2,y2,score], ...]
+
         Returns:
-            tracks: List of active tracks [[x1,y1,x2,y2,track_id], ...]
+            tracks: Array of active tracks [[x1,y1,x2,y2,track_id], ...]
         """
         self.frame_count += 1
-        
-        # Get predicted locations from existing trackers
-        trks = np.zeros((len(self.trackers), 5))
-        to_del = []
-        for t in range(len(self.trackers)):
-            pos = self.trackers[t].predict()  # Returns bbox [x1, y1, x2, y2]
-            # Ensure pos is a 1D array
-            pos = np.atleast_1d(pos).flatten()
-            if len(pos) >= 4:
-                trks[t] = [pos[0], pos[1], pos[2], pos[3], 0]
-            if np.any(np.isnan(pos)):
-                to_del.append(t)
-                
-        trks = np.ma.compress_rows(np.ma.masked_invalid(trks))
-        for t in reversed(to_del):
-            self.trackers.pop(t)
-            
-        # Associate detections to trackers
-        matched, unmatched_dets, unmatched_trks = self._associate_detections_to_trackers(
-            detections, trks
+
+        # Separate detections by confidence
+        if len(detections) > 0:
+            high_det_idx = detections[:, 4] >= self.track_high_thresh
+            low_det_idx = (detections[:, 4] >= self.track_low_thresh) & (detections[:, 4] < self.track_high_thresh)
+
+            detections_high = detections[high_det_idx]
+            detections_low = detections[low_det_idx]
+
+            # Log detection confidence distribution
+            if len(detections) > 1:
+                self.logger.debug(f"📊 {len(detections)} detections: {len(detections_high)} high-conf (≥{self.track_high_thresh}), {len(detections_low)} low-conf ({self.track_low_thresh}-{self.track_high_thresh})")
+                if len(detections_low) > 0:
+                    self.logger.debug(f"   Low-conf scores: {[f'{d[4]:.2f}' for d in detections_low]}")
+        else:
+            detections_high = np.empty((0, 5))
+            detections_low = np.empty((0, 5))
+
+        # Predict all tracks
+        for track in self.tracked_tracks + self.lost_tracks:
+            track.predict()
+
+        # STAGE 1: Associate high-confidence detections with tracked tracks
+        matched_high, unmatched_tracks_high, unmatched_dets_high = self._associate(
+            detections_high, self.tracked_tracks, self.iou_threshold
         )
-        
-        # Update matched trackers
-        for m in matched:
-            self.trackers[m[1]].update(detections[m[0], :])
-            
-        # Create new trackers for unmatched detections
-        for i in unmatched_dets:
-            trk = KalmanBoxTracker(detections[i, :])
-            self.trackers.append(trk)
+
+        # Update matched tracks
+        for track_idx, det_idx in matched_high:
+            self.tracked_tracks[track_idx].update(detections_high[det_idx, :])
+
+        # STAGE 2: Associate remaining tracks with low-confidence detections
+        # This is the key innovation of ByteTrack - recover lost tracks with low-conf detections
+        unmatched_tracks = [self.tracked_tracks[i] for i in unmatched_tracks_high]
+
+        matched_low, unmatched_tracks_low, unmatched_dets_low = self._associate(
+            detections_low, unmatched_tracks, self.iou_threshold
+        )
+
+        # Update tracks matched with low-confidence detections
+        for track_idx, det_idx in matched_low:
+            unmatched_tracks[track_idx].update(detections_low[det_idx, :])
+
+        # Mark remaining unmatched tracks as lost
+        for track_idx in unmatched_tracks_low:
+            track = unmatched_tracks[track_idx]
+            if track.state != 'lost':
+                track.mark_lost()
+
+        # STAGE 3: Associate lost tracks with remaining high-confidence detections
+        unmatched_dets_high_idx = [detections_high[i] for i in unmatched_dets_high]
+
+        matched_lost, unmatched_lost, unmatched_dets_final = self._associate(
+            np.array(unmatched_dets_high_idx) if len(unmatched_dets_high_idx) > 0 else np.empty((0, 5)),
+            self.lost_tracks,
+            self.iou_threshold
+        )
+
+        # Reactivate lost tracks that were matched
+        for track_idx, det_idx in matched_lost:
+            self.lost_tracks[track_idx].reactivate(
+                unmatched_dets_high_idx[det_idx] if len(unmatched_dets_high_idx) > 0 else None
+            )
+            self.tracked_tracks.append(self.lost_tracks[track_idx])
+
+        # Create new tracks from remaining high-confidence detections
+        for det_idx in unmatched_dets_final:
+            if len(unmatched_dets_high_idx) > 0:
+                det = unmatched_dets_high_idx[det_idx]
+                if det[4] >= self.new_track_thresh:  # Only create track if above new track threshold
+                    new_track = KalmanBoxTracker(det)
+                    new_track.activate(self.frame_count)
+                    self.tracked_tracks.append(new_track)
+
+        # Remove lost tracks from lost_tracks list if they were reactivated
+        self.lost_tracks = [t for i, t in enumerate(self.lost_tracks) if i not in [m[0] for m in matched_lost]]
+
+        # Move tracks from tracked to lost if they've been lost
+        tracked_tracks_new = []
+        for track in self.tracked_tracks:
+            if track.state == 'tracked':
+                tracked_tracks_new.append(track)
+            else:
+                self.lost_tracks.append(track)
+        self.tracked_tracks = tracked_tracks_new
+
+        # Remove dead tracks
+        # Log tracks being removed
+        removed_lost = [t for t in self.lost_tracks if t.time_since_update > self.max_age]
+        removed_tracked = [t for t in self.tracked_tracks if t.time_since_update > self.max_age]
+
+        if len(removed_lost) > 0:
+            self.logger.warning(f"⚠️ Removing {len(removed_lost)} lost tracks (exceeded max_age={self.max_age}): {[t.id for t in removed_lost]}")
+        if len(removed_tracked) > 0:
+            self.logger.warning(f"⚠️ Removing {len(removed_tracked)} tracked tracks (exceeded max_age={self.max_age}): {[t.id for t in removed_tracked]}")
+
+        self.lost_tracks = [t for t in self.lost_tracks if t.time_since_update <= self.max_age]
+        self.tracked_tracks = [t for t in self.tracked_tracks if t.time_since_update <= self.max_age]
 
         # Return active tracks
-        ret = []
-        for trk in self.trackers:
-            # More lenient condition for returning tracks
-            if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= 3):
-                d = trk.get_state()
-                ret.append(np.concatenate((d, [trk.id])).reshape(1, -1))
+        output_tracks = []
+        for track in self.tracked_tracks:
+            if track.is_activated and track.time_since_update < 1:
+                d = track.get_state()
+                output_tracks.append(np.concatenate((d, [track.id])).reshape(1, -1))
 
-        # Remove dead trackers
-        self.trackers = [t for t in self.trackers if t.time_since_update < self.max_age]
-
-        if len(ret) > 0:
-            return np.concatenate(ret)
+        if len(output_tracks) > 0:
+            return np.concatenate(output_tracks)
         return np.empty((0, 5))
+
+    def _associate(self, detections, tracks, iou_threshold):
+        """
+        Associate detections to tracks using IoU matching
+
+        Args:
+            detections: Array of detections [[x1,y1,x2,y2,score], ...]
+            tracks: List of track objects
+            iou_threshold: IoU threshold for matching
+
+        Returns:
+            matches: List of (track_idx, det_idx) pairs
+            unmatched_tracks: List of unmatched track indices
+            unmatched_dets: List of unmatched detection indices
+        """
+        if len(tracks) == 0:
+            return [], [], list(range(len(detections)))
+
+        if len(detections) == 0:
+            return [], list(range(len(tracks))), []
+
+        # Build IoU matrix
+        iou_matrix = np.zeros((len(detections), len(tracks)), dtype=np.float32)
+
+        for d, det in enumerate(detections):
+            for t, track in enumerate(tracks):
+                track_bbox = track.get_state()
+                iou_matrix[d, t] = self._iou(det[:4], track_bbox)
+
+        # Use Hungarian algorithm for optimal assignment
+        if min(iou_matrix.shape) > 0:
+            # Try greedy assignment first (faster)
+            a = (iou_matrix > iou_threshold).astype(np.int32)
+            if a.sum(1).max() == 1 and a.sum(0).max() == 1:
+                matched_indices = np.stack(np.where(a), axis=1)
+            else:
+                # Use Hungarian algorithm
+                matched_indices = self._linear_assignment(-iou_matrix)
+        else:
+            matched_indices = np.empty(shape=(0, 2))
+
+        # Find unmatched detections and tracks
+        unmatched_dets = []
+        for d in range(len(detections)):
+            if len(matched_indices) == 0 or d not in matched_indices[:, 0]:
+                unmatched_dets.append(d)
+
+        unmatched_tracks = []
+        for t in range(len(tracks)):
+            if len(matched_indices) == 0 or t not in matched_indices[:, 1]:
+                unmatched_tracks.append(t)
+
+        # Filter out matched with low IOU
+        matches = []
+        for m in matched_indices:
+            if iou_matrix[m[0], m[1]] < iou_threshold:
+                unmatched_dets.append(m[0])
+                unmatched_tracks.append(m[1])
+            else:
+                matches.append((m[1], m[0]))  # (track_idx, det_idx)
+
+        return matches, unmatched_tracks, unmatched_dets
 
     def _associate_detections_to_trackers(self, detections, trackers):
         """Associate detections to tracked objects using IOU"""
@@ -243,4 +424,8 @@ class SORTTracker:
         """Linear assignment using Hungarian algorithm"""
         x, y = linear_sum_assignment(cost_matrix)
         return np.array(list(zip(x, y)))
+
+
+# Backward compatibility alias
+SORTTracker = ByteTracker
 

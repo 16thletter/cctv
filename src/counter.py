@@ -112,7 +112,13 @@ class PeopleCounter:
         # Recently counted positions to prevent ID swap double counting
         # Format: [(position, timestamp, type), ...]
         self.recent_counts = deque(maxlen=20)  # Keep last 20 counts
-        self.position_threshold = 50  # Pixels - if new track is within this distance, might be ID swap (reduced for multiple people)
+
+        # SPATIAL SEPARATION THRESHOLDS for multi-person handling
+        # Vertical threshold (Y-axis) - perpendicular to door line
+        self.vertical_threshold = 40  # Pixels - distance along crossing direction
+        # Horizontal threshold (X-axis) - parallel to door line
+        self.horizontal_threshold = 80  # Pixels - distance along the door width
+        # This allows multiple people to cross simultaneously at different positions along the door
 
         # Event log
         self.events = []
@@ -121,6 +127,7 @@ class PeopleCounter:
         self.logger.info(f"Door region (center 50%): {self.door_start} to {self.door_end}")
         self.logger.info(f"IN direction: {self.in_direction}")
         self.logger.info(f"Using ZONE-BASED tracking: min_zone_frames={self.min_zone_frames}, min_transition_frames={self.min_transition_frames}")
+        self.logger.info(f"SPATIAL SEPARATION enabled: vertical_threshold={self.vertical_threshold}px, horizontal_threshold={self.horizontal_threshold}px")
 
         # Log zone interpretation
         if self.in_direction == 'down':
@@ -275,8 +282,14 @@ class PeopleCounter:
 
     def _is_near_recent_count(self, position, event_type, frame_number):
         """
-        Check if this position is too close to a recently counted person.
-        This helps prevent double counting due to ID swaps in groups.
+        Check if this position is too close to a recently counted person using SPATIAL SEPARATION.
+        This helps prevent double counting due to ID swaps while allowing simultaneous crossings.
+
+        SPATIAL SEPARATION LOGIC:
+        - Checks both VERTICAL (Y) and HORIZONTAL (X) distances separately
+        - For horizontal door lines: Y = crossing direction, X = position along door
+        - Allows multiple people to cross simultaneously at different horizontal positions
+        - Only blocks if BOTH vertical AND horizontal distances are too close
 
         Args:
             position: (x, y) tuple
@@ -291,17 +304,95 @@ class PeopleCounter:
             if recent_type != event_type:
                 continue
 
-            # Only check recent counts (within last 25 frames = 1 second)
-            if frame_number - recent_frame > 25:
+            # Only check VERY recent counts (within last 10 frames = 0.33 seconds)
+            # REDUCED from 25 frames to allow multiple people in quick succession
+            if frame_number - recent_frame > 10:
                 continue
 
-            # Calculate distance
-            distance = np.sqrt((position[0] - recent_pos[0])**2 + (position[1] - recent_pos[1])**2)
+            # SPATIAL SEPARATION: Calculate vertical and horizontal distances separately
+            # For horizontal lines (most common):
+            # - vertical_distance (Y) = distance in crossing direction (perpendicular to line)
+            # - horizontal_distance (X) = distance along the door (parallel to line)
 
-            if distance < self.position_threshold:
+            vertical_distance = abs(position[1] - recent_pos[1])  # Y-axis distance
+            horizontal_distance = abs(position[0] - recent_pos[0])  # X-axis distance
+
+            # Check if this is likely an ID swap (close in BOTH dimensions)
+            # If people are far apart horizontally, they're different people even if close vertically
+            is_too_close_vertically = vertical_distance < self.vertical_threshold
+            is_too_close_horizontally = horizontal_distance < self.horizontal_threshold
+
+            if is_too_close_vertically and is_too_close_horizontally:
+                # Both distances are small - likely ID swap
+                self.logger.debug(
+                    f"ID swap detected: position={position}, recent={recent_pos}, "
+                    f"vertical_dist={vertical_distance:.1f}px (thresh={self.vertical_threshold}), "
+                    f"horizontal_dist={horizontal_distance:.1f}px (thresh={self.horizontal_threshold})"
+                )
                 return True
+            elif is_too_close_vertically and not is_too_close_horizontally:
+                # Close vertically but far horizontally - different people crossing simultaneously
+                self.logger.debug(
+                    f"Simultaneous crossing allowed: position={position}, recent={recent_pos}, "
+                    f"vertical_dist={vertical_distance:.1f}px, horizontal_dist={horizontal_distance:.1f}px "
+                    f"(far apart horizontally - different person)"
+                )
+                # Continue checking other recent counts
 
         return False
+
+    def _validate_movement_direction(self, track_id, expected_direction):
+        """
+        Validate that the track's movement matches the expected direction.
+        Uses trajectory history to calculate actual movement direction.
+
+        Args:
+            track_id: Track ID
+            expected_direction: 'IN' or 'OUT'
+
+        Returns:
+            True if movement direction is valid, False otherwise
+        """
+        history = self.track_history[track_id]
+
+        # Need at least 5 points for reliable direction calculation
+        if len(history) < 5:
+            return True  # Not enough data, allow the count
+
+        # Get first and last few positions
+        start_positions = list(history)[:3]
+        end_positions = list(history)[-3:]
+
+        # Calculate average start and end positions
+        start_y = sum(pos[1] for pos in start_positions) / len(start_positions)
+        end_y = sum(pos[1] for pos in end_positions) / len(end_positions)
+
+        # Calculate movement in Y direction
+        y_movement = end_y - start_y
+
+        # Determine actual direction based on movement
+        # For horizontal lines: positive Y = moving down, negative Y = moving up
+        if self.in_direction == 'down':
+            # IN = moving down (positive Y), OUT = moving up (negative Y)
+            if expected_direction == 'IN':
+                is_valid = y_movement > 5  # Moved down at least 5 pixels
+            else:  # OUT
+                is_valid = y_movement < -5  # Moved up at least 5 pixels
+        else:  # in_direction == 'up'
+            # IN = moving up (negative Y), OUT = moving down (positive Y)
+            if expected_direction == 'IN':
+                is_valid = y_movement < -5  # Moved up at least 5 pixels
+            else:  # OUT
+                is_valid = y_movement > 5  # Moved down at least 5 pixels
+
+        if not is_valid:
+            self.logger.info(
+                f"Track {track_id}: Movement direction mismatch! "
+                f"Expected={expected_direction}, y_movement={y_movement:.1f}px, "
+                f"in_direction={self.in_direction}"
+            )
+
+        return is_valid
 
     def _is_in_door_region(self, point):
         """
@@ -544,7 +635,16 @@ class PeopleCounter:
 
             # ONLY count if direction is 'entering' AND origin was 'outside'
             if direction == 'entering' and origin == 'outside':
-                # Check for ID swap
+                # Validate movement direction using trajectory
+                if not self._validate_movement_direction(track_id, 'IN'):
+                    self.logger.info(f"Track {track_id} movement direction invalid for IN - ignoring")
+                    state_info['state'] = 'inside'
+                    state_info['zone_frames'] = 1
+                    state_info['origin_zone'] = None
+                    self.counted_ids.add(track_id)
+                    return None
+
+                # Check for ID swap using spatial separation
                 if self._is_near_recent_count(centroid, 'IN', frame_number):
                     self.logger.info(f"Track {track_id} near recent IN count - likely ID swap, ignoring")
                     state_info['state'] = 'inside'
@@ -624,7 +724,16 @@ class PeopleCounter:
 
             # ONLY count if direction is 'exiting' AND origin was 'inside'
             if direction == 'exiting' and origin == 'inside':
-                # Check for ID swap
+                # Validate movement direction using trajectory
+                if not self._validate_movement_direction(track_id, 'OUT'):
+                    self.logger.info(f"Track {track_id} movement direction invalid for OUT - ignoring")
+                    state_info['state'] = 'outside'
+                    state_info['zone_frames'] = 1
+                    state_info['origin_zone'] = None
+                    self.counted_ids.add(track_id)
+                    return None
+
+                # Check for ID swap using spatial separation
                 if self._is_near_recent_count(centroid, 'OUT', frame_number):
                     self.logger.info(f"Track {track_id} near recent OUT count - likely ID swap, ignoring")
                     state_info['state'] = 'outside'
@@ -717,7 +826,15 @@ class PeopleCounter:
             # This happens when frames are dropped or person moves very fast
             # Use lower threshold for zone skips to catch fast movements
             if zone_frames >= self.min_zone_frames_for_skip:
-                # Check for ID swap
+                # Validate movement direction using trajectory
+                if not self._validate_movement_direction(track_id, 'IN'):
+                    self.logger.info(f"Track {track_id} movement direction invalid for IN (zone skip) - ignoring")
+                    state_info['state'] = 'inside'
+                    state_info['zone_frames'] = 1
+                    self.counted_ids.add(track_id)
+                    return None
+
+                # Check for ID swap using spatial separation
                 if self._is_near_recent_count(centroid, 'IN', frame_number):
                     self.logger.info(f"Track {track_id} near recent IN count - likely ID swap, ignoring")
                     state_info['state'] = 'inside'
@@ -768,7 +885,15 @@ class PeopleCounter:
             # Person jumped from inside to outside (missed transition zone)
             # Use lower threshold for zone skips to catch fast movements
             if zone_frames >= self.min_zone_frames_for_skip:
-                # Check for ID swap
+                # Validate movement direction using trajectory
+                if not self._validate_movement_direction(track_id, 'OUT'):
+                    self.logger.info(f"Track {track_id} movement direction invalid for OUT (zone skip) - ignoring")
+                    state_info['state'] = 'outside'
+                    state_info['zone_frames'] = 1
+                    self.counted_ids.add(track_id)
+                    return None
+
+                # Check for ID swap using spatial separation
                 if self._is_near_recent_count(centroid, 'OUT', frame_number):
                     self.logger.info(f"Track {track_id} near recent OUT count - likely ID swap, ignoring")
                     state_info['state'] = 'outside'
@@ -844,12 +969,32 @@ class PeopleCounter:
             print(f"📊 MULTIPLE PEOPLE: Tracking {len(active_track_ids)} people: {sorted(active_track_ids)}")
             print(f"{'='*70}")
 
-        # Clean up state for inactive tracks
+        # Clean up state for inactive tracks (with grace period)
+        # CRITICAL: Don't immediately delete state when track is lost!
+        # Keep state for grace period to allow track recovery
         for track_id in list(self.track_states.keys()):
             if track_id not in active_track_ids:
-                if self.track_states[track_id]['state'] is not None:
-                    self.logger.debug(f"Track {track_id} lost, cleaning up state")
+                state_info = self.track_states[track_id]
+
+                # Initialize lost_frames counter if not present
+                if 'lost_frames' not in state_info:
+                    state_info['lost_frames'] = 0
+
+                state_info['lost_frames'] += 1
+
+                # Only delete state after grace period (90 frames = 3 seconds)
+                # This matches max_age in tracker config
+                if state_info['lost_frames'] > 90:
+                    self.logger.debug(f"Track {track_id} lost for {state_info['lost_frames']} frames, cleaning up state")
                     del self.track_states[track_id]
+                else:
+                    self.logger.debug(f"Track {track_id} temporarily lost ({state_info['lost_frames']} frames), keeping state for recovery")
+            else:
+                # Track is active, reset lost_frames counter
+                if 'lost_frames' in self.track_states[track_id]:
+                    if self.track_states[track_id]['lost_frames'] > 0:
+                        self.logger.info(f"✅ Track {track_id} RECOVERED after {self.track_states[track_id]['lost_frames']} frames - continuing from state={self.track_states[track_id].get('state')}")
+                    self.track_states[track_id]['lost_frames'] = 0
 
         # Process each track using zone-based state machine
         for track in tracks:
@@ -874,9 +1019,8 @@ class PeopleCounter:
             origin = state_info.get('origin_zone') or 'none'
             zone_frames = state_info.get('zone_frames', 0)
 
-            # Show detailed info for each person when multiple people present
-            if len(active_track_ids) > 1:
-                print(f"  👤 Track {track_id}: zone={current_zone:10s} | state={current_state:10s} | dir={direction:8s} | origin={origin:7s} | frames={zone_frames}")
+            # Show detailed info for ALL tracks (for debugging)
+            print(f"  👤 Track {track_id}: zone={current_zone:10s} | state={current_state:10s} | dir={direction:8s} | origin={origin:7s} | frames={zone_frames}")
 
             self.logger.debug(f"Track {track_id}: zone={current_zone}, state={current_state}, dir={direction}, origin={origin}, frames={zone_frames}, pos=({cx},{cy})")
 
