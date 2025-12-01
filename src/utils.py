@@ -19,18 +19,42 @@ def load_config(config_path="config/config.yaml"):
         config = yaml.safe_load(f)
 
     # Override camera source with environment variable if set
-    rtsp_url = os.getenv('RTSP_URL')
-    if rtsp_url:
-        # Convert "0" string to integer for webcam
-        if rtsp_url == "0":
-            config['camera']['source'] = 0
-        else:
-            config['camera']['source'] = rtsp_url
+    # Support both old RTSP_URL and new source_env pattern
+    if 'camera' in config:
+        # New pattern: source_env specifies environment variable name
+        if 'source_env' in config['camera']:
+            env_var_name = config['camera']['source_env']
+            rtsp_url = os.getenv(env_var_name)
+            if rtsp_url:
+                # Convert "0" string to integer for webcam
+                config['camera']['source'] = 0 if rtsp_url == "0" else rtsp_url
+        # Legacy pattern: RTSP_URL environment variable
+        elif 'source' not in config['camera']:
+            rtsp_url = os.getenv('RTSP_URL')
+            if rtsp_url:
+                config['camera']['source'] = 0 if rtsp_url == "0" else rtsp_url
 
-    # Override database path if set
-    db_path = os.getenv('DB_PATH')
-    if db_path:
-        config['database']['path'] = db_path
+    # Override database credentials with environment variables
+    if 'database' in config:
+        db_host = os.getenv('POSTGRES_HOST')
+        if db_host:
+            config['database']['host'] = db_host
+
+        db_port = os.getenv('POSTGRES_PORT')
+        if db_port:
+            config['database']['port'] = int(db_port)
+
+        db_name = os.getenv('POSTGRES_DB')
+        if db_name:
+            config['database']['database'] = db_name
+
+        db_user = os.getenv('POSTGRES_USER')
+        if db_user:
+            config['database']['user'] = db_user
+
+        db_password = os.getenv('POSTGRES_PASSWORD')
+        if db_password:
+            config['database']['password'] = db_password
 
     # Override logging configuration if set
     log_level = os.getenv('LOG_LEVEL')
@@ -42,6 +66,39 @@ def load_config(config_path="config/config.yaml"):
         config['logging']['file'] = log_file
 
     return config
+
+
+def get_camera_url(camera_config):
+    """
+    Get camera RTSP URL from environment variable
+
+    Args:
+        camera_config: Camera configuration dict with 'source_env' or 'source' key
+
+    Returns:
+        RTSP URL string or webcam index (0)
+    """
+    # Load environment variables
+    load_dotenv()
+
+    # If source_env is specified, load from environment variable
+    if 'source_env' in camera_config:
+        env_var_name = camera_config['source_env']
+        rtsp_url = os.getenv(env_var_name)
+
+        if not rtsp_url:
+            raise ValueError(f"Environment variable '{env_var_name}' not found. "
+                           f"Please set it in .env file.")
+
+        # Convert "0" string to integer for webcam
+        return 0 if rtsp_url == "0" else rtsp_url
+
+    # Otherwise, use source directly (backward compatibility)
+    elif 'source' in camera_config:
+        return camera_config['source']
+
+    else:
+        raise ValueError("Camera configuration must have 'source_env' or 'source' key")
 
 
 def setup_logging(config):
