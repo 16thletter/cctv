@@ -1,0 +1,154 @@
+# ============================================================================
+# DYNAMIC CAMERA CONFIGURATION
+# ============================================================================
+# This config file contains ONLY application-wide settings.
+# Individual camera configurations are stored in the DATABASE.
+# 
+# To add cameras:
+#   python3 manage_cameras.py add --camera-id <id> --rtsp-url-env <env_var>
+#
+# To run cameras:
+#   python3 run_cameras.py
+# ============================================================================
+
+# ============================================================================
+# DATABASE CONFIGURATION
+# ============================================================================
+# PostgreSQL database for face recognition, attendance, and camera configs
+# Credentials can be overridden by environment variables:
+#   POSTGRES_HOST, POSTGRES_PORT, POSTGRES_DB, POSTGRES_USER, POSTGRES_PASSWORD
+database:
+  enabled: true
+  type: postgresql
+  host: localhost
+  port: 5432
+  database: face_recognition
+  user: postgres
+  password: your_password_here  # Override with POSTGRES_PASSWORD in .env
+  log_events: true
+
+# ============================================================================
+# FACE RECOGNITION CONFIGURATION
+# ============================================================================
+# InsightFace with ArcFace embeddings (512-dimensional vectors)
+face_recognition:
+  enabled: true
+  model: buffalo_l  # InsightFace model (buffalo_l, buffalo_s, buffalo_sc)
+  providers:
+    - CUDAExecutionProvider  # GPU acceleration (comment out for CPU only)
+    - CPUExecutionProvider
+  det_size: [640, 640]  # Face detection size (larger = more accurate, slower)
+  confidence_threshold: 0.6  # Face matching threshold (0.0-1.0, higher = stricter)
+  min_face_size: 50  # Minimum face size in pixels
+  max_faces_per_frame: 10  # Maximum faces to process per frame
+  save_snapshots: true  # Save face snapshots on detection
+  snapshot_dir: snapshots/faces
+
+# ============================================================================
+# PERSON DETECTION CONFIGURATION (YOLOv8)
+# ============================================================================
+detection:
+  model: yolov8n.pt  # YOLOv8 model (yolov8n, yolov8s, yolov8m, yolov8l, yolov8x)
+  device: cpu  # 'cpu' or 'cuda' or '0' for GPU
+  imgsz: 480  # Input image size (640, 480, 320)
+  confidence: 0.3  # Detection confidence threshold (0.0-1.0)
+  classes: [0]  # Class IDs to detect (0 = person)
+
+# ============================================================================
+# TRACKING CONFIGURATION (ByteTrack)
+# ============================================================================
+tracking:
+  track_high_thresh: 0.4  # High confidence threshold for track association
+  track_low_thresh: 0.05  # Low confidence threshold for track recovery
+  new_track_thresh: 0.4  # Threshold for creating new tracks
+  track_buffer: 45  # Frames to keep lost tracks (for recovery)
+  max_age: 90  # Maximum frames to keep track alive without detection
+  min_hits: 1  # Minimum detections before track is confirmed
+  iou_threshold: 0.3  # IoU threshold for track matching
+
+# ============================================================================
+# COUNTING LINE CONFIGURATION (DEFAULT)
+# ============================================================================
+# These are DEFAULT settings applied to all cameras unless overridden
+# Individual cameras can have custom counting lines stored in database
+counting_line:
+  # Outside line (normalized coordinates: x1, y1, x2, y2)
+  outside_line: [0.35, 0.52, 0.65, 0.52]  # Horizontal line at 52% height
+  
+  # Inside line (normalized coordinates: x1, y1, x2, y2)
+  inside_line: [0.35, 0.58, 0.65, 0.58]  # Horizontal line at 58% height
+  
+  # Direction that counts as "IN" (up, down, left, right)
+  in_direction: down
+  
+  # Visual settings
+  color: [0, 255, 0]  # Line color (BGR: Green)
+  thickness: 3  # Line thickness in pixels
+  
+  # Counting logic
+  cooldown_frames: 75  # Frames to wait before counting same person again
+  min_track_length: 5  # Minimum track length before counting
+
+# ============================================================================
+# DISPLAY CONFIGURATION
+# ============================================================================
+display:
+  show_video: true  # Show video window (set false for headless operation)
+  show_detections: true  # Show bounding boxes
+  show_tracks: true  # Show track IDs
+  show_trails: true  # Show movement trails
+  show_counts: true  # Show IN/OUT counts
+  trail_length: 30  # Number of points in trail
+  save_output: false  # Save output video
+  output_path: output/output.avi  # Output video path
+
+# ============================================================================
+# PROCESSING CONFIGURATION
+# ============================================================================
+processing:
+  skip_frames: 2  # Process every Nth frame (0 = process all frames)
+  num_threads: 4  # Number of processing threads
+  roi_enabled: false  # Enable Region of Interest
+  roi_coordinates: [0, 0, 1, 1]  # ROI coordinates (normalized)
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR, CRITICAL
+  console: true  # Log to console
+  file: logs/app.log  # Log file path
+
+# ============================================================================
+# CAMERA-SPECIFIC SETTINGS (OPTIONAL)
+# ============================================================================
+# These settings are used ONLY when running in legacy single-camera mode
+# For dynamic multi-camera mode, cameras are loaded from database
+# 
+# Legacy single camera mode (NOT RECOMMENDED):
+#   python3 main.py
+#
+# Dynamic multi-camera mode (RECOMMENDED):
+#   python3 run_cameras.py
+camera:
+  # Default camera settings (used as fallback)
+  width: 1280
+  height: 720
+  fps: 30
+  
+  # Legacy single camera config (optional)
+  # id: main
+  # source_env: CAMERA_MAIN_URL
+  # organization_id: null
+  # location: Main Entrance
+
+# ============================================================================
+# NOTES
+# ============================================================================
+# 1. Camera configurations are stored in PostgreSQL database
+# 2. Use manage_cameras.py to add/list/manage cameras
+# 3. Use run_cameras.py to run cameras dynamically from database
+# 4. RTSP URLs are stored in .env file for security
+# 5. This config file contains only application-wide settings
+# ============================================================================
+
