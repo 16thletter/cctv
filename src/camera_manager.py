@@ -62,7 +62,7 @@ class CameraManager:
                         f"Environment variable '{cam.rtsp_url_env}' not found for camera '{cam.camera_id}'"
                     )
                     continue
-            
+
             camera_config = {
                 'id': cam.camera_id,
                 'source': rtsp_url,
@@ -71,8 +71,32 @@ class CameraManager:
                 'description': cam.description,
                 'db_id': cam.id
             }
+
+            # Add camera-specific counting line configuration if set
+            # If NULL in database, will use defaults from config.yaml
+            if cam.outside_line_x1 is not None:
+                camera_config['counting_line'] = {
+                    'outside_line': [
+                        cam.outside_line_x1,
+                        cam.outside_line_y1,
+                        cam.outside_line_x2,
+                        cam.outside_line_y2
+                    ],
+                    'inside_line': [
+                        cam.inside_line_x1,
+                        cam.inside_line_y1,
+                        cam.inside_line_x2,
+                        cam.inside_line_y2
+                    ],
+                    'in_direction': cam.in_direction,
+                    'color': [cam.line_color_r, cam.line_color_g, cam.line_color_b],
+                    'thickness': cam.line_thickness,
+                    'cooldown_frames': cam.cooldown_frames,
+                    'min_track_length': cam.min_track_length
+                }
+
             camera_configs.append(camera_config)
-        
+
         self.logger.info(f"Loaded {len(camera_configs)} active camera(s) from database")
         return camera_configs
     

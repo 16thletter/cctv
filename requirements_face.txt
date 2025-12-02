@@ -1,17 +1,13 @@
 # Face Recognition Dependencies
+# Note: Install requirements.txt FIRST to get correct numpy/opencv versions
 insightface==0.7.3
-onnxruntime-gpu==1.16.3  # Use onnxruntime==1.16.3 for CPU only
-onnx==1.15.0
+onnxruntime>=1.17.0  # Use onnxruntime-gpu>=1.17.0 for GPU support
+onnx>=1.15.0
 
 # PostgreSQL Dependencies
-psycopg2-binary==2.9.9
-sqlalchemy==2.0.23
-pgvector==0.2.4
-
-# Image Processing (likely already installed)
-opencv-python>=4.8.0
-numpy>=1.24.0
-pillow>=10.0.0
+psycopg2-binary>=2.9.9
+sqlalchemy>=2.0.23
+pgvector>=0.2.4
 
 # Utilities
 python-dotenv>=1.0.0

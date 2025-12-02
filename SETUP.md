@@ -118,6 +118,19 @@ venv\Scripts\activate
 ```
 
 ### Install Python Dependencies
+
+**Option 1: Automated Installation (Recommended)**
+```bash
+# Run the installation script
+./install_dependencies.sh
+
+# This will:
+# - Install all dependencies
+# - Remove conflicting packages
+# - Verify installation
+```
+
+**Option 2: Manual Installation**
 ```bash
 # Upgrade pip
 pip install --upgrade pip
@@ -128,16 +141,50 @@ pip install -r requirements.txt
 # Install face recognition dependencies
 pip install -r requirements_face.txt
 
-# This will take 5-10 minutes
+# Remove OpenVINO if installed (causes conflicts)
+pip uninstall -y openvino openvino-dev openvino-telemetry || true
+
+# Remove opencv-python-headless if installed (conflicts with opencv-python)
+pip uninstall -y opencv-python-headless || true
 ```
 
 ### Verify Installation
 ```bash
-# Test core imports
-python3 -c "import cv2; import ultralytics; print('✅ Core dependencies OK!')"
+# Run verification script
+python3 verify_installation.py
 
-# Test face recognition imports
-python3 -c "import insightface; import psycopg2; print('✅ Face recognition dependencies OK!')"
+# This will check all dependencies and show versions
+```
+
+**Expected output:**
+```
+============================================================
+CCTV People Counter - Dependency Verification
+============================================================
+
+📦 Core Dependencies:
+------------------------------------------------------------
+✅ NumPy: OK
+✅ OpenCV: OK
+✅ Ultralytics (YOLOv8): OK
+✅ PyTorch: OK
+✅ TorchVision: OK
+
+👤 Face Recognition Dependencies:
+------------------------------------------------------------
+✅ InsightFace: OK
+✅ ONNX: OK
+✅ ONNX Runtime: OK
+
+🗄️  Database Dependencies:
+------------------------------------------------------------
+✅ PostgreSQL (psycopg2): OK
+✅ SQLAlchemy: OK
+✅ pgvector: OK
+
+============================================================
+🎉 SUCCESS! All dependencies are installed correctly!
+============================================================
 ```
 
 ---
@@ -250,7 +297,7 @@ python3 manage_organizations.py add \
 python3 manage_organizations.py list
 
 # View organization stats
-python3 manage_organizations.py stats --organization-id 1
+python3 manage_organizations.py stats --id 1
 ```
 
 ### Add Multiple Organizations (Optional)
@@ -327,7 +374,7 @@ python3 enroll_face.py \
   --employee-id "EMP002" \
   --organization-id 1 \
   --designation "Developer" \
-  --image-path /path/to/photo.jpg
+  --image /path/to/photo.jpg
 ```
 
 ### Enroll Multiple Employees

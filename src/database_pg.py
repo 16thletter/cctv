@@ -4,9 +4,9 @@ Supports multi-camera setup with face recognition and tracking
 """
 import logging
 import numpy as np
-from datetime import datetime
+from datetime import datetime, date
 from typing import Optional, List, Dict, Tuple
-from sqlalchemy import create_engine, Column, Integer, String, DateTime, Float, Boolean, Text, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, DateTime, Date, Float, Boolean, Text, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from pgvector.sqlalchemy import Vector
@@ -51,6 +51,23 @@ class Camera(Base):
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
+
+    # Counting line configuration (NULL = use defaults from config.yaml)
+    outside_line_x1 = Column(Float, nullable=True)
+    outside_line_y1 = Column(Float, nullable=True)
+    outside_line_x2 = Column(Float, nullable=True)
+    outside_line_y2 = Column(Float, nullable=True)
+    inside_line_x1 = Column(Float, nullable=True)
+    inside_line_y1 = Column(Float, nullable=True)
+    inside_line_x2 = Column(Float, nullable=True)
+    inside_line_y2 = Column(Float, nullable=True)
+    in_direction = Column(String(10), default='down')
+    line_color_r = Column(Integer, default=0)
+    line_color_g = Column(Integer, default=255)
+    line_color_b = Column(Integer, default=0)
+    line_thickness = Column(Integer, default=3)
+    cooldown_frames = Column(Integer, default=75)
+    min_track_length = Column(Integer, default=5)
 
     # Relationship
     organization = relationship("Organization", back_populates="cameras")
@@ -241,8 +258,31 @@ class PostgreSQLDatabase:
     # ========================================================================
 
     def add_camera(self, camera_id: str, rtsp_url_env: str, location: str = None,
-                   organization_id: int = None, description: str = None) -> Optional[int]:
-        """Add a new camera"""
+                   organization_id: int = None, description: str = None,
+                   outside_line: list = None, inside_line: list = None,
+                   in_direction: str = None, line_color: list = None,
+                   line_thickness: int = None, cooldown_frames: int = None,
+                   min_track_length: int = None) -> Optional[int]:
+        """
+        Add a new camera
+
+        Args:
+            camera_id: Unique camera identifier
+            rtsp_url_env: Environment variable name for RTSP URL
+            location: Camera location description
+            organization_id: Organization ID this camera belongs to
+            description: Camera description
+            outside_line: Outside counting line [x1, y1, x2, y2] (normalized 0.0-1.0)
+            inside_line: Inside counting line [x1, y1, x2, y2] (normalized 0.0-1.0)
+            in_direction: Direction that counts as IN ('up', 'down', 'left', 'right')
+            line_color: Line color [r, g, b] (0-255)
+            line_thickness: Line thickness in pixels
+            cooldown_frames: Frames to wait before counting same person again
+            min_track_length: Minimum track length before counting
+
+        Returns:
+            Camera ID if successful, None otherwise
+        """
         if not self.session:
             return None
 
@@ -255,6 +295,36 @@ class PostgreSQLDatabase:
                 rtsp_url_env=rtsp_url_env,
                 is_active=True
             )
+
+            # Set counting line configuration if provided
+            if outside_line and len(outside_line) == 4:
+                camera.outside_line_x1 = outside_line[0]
+                camera.outside_line_y1 = outside_line[1]
+                camera.outside_line_x2 = outside_line[2]
+                camera.outside_line_y2 = outside_line[3]
+
+            if inside_line and len(inside_line) == 4:
+                camera.inside_line_x1 = inside_line[0]
+                camera.inside_line_y1 = inside_line[1]
+                camera.inside_line_x2 = inside_line[2]
+                camera.inside_line_y2 = inside_line[3]
+
+            if in_direction:
+                camera.in_direction = in_direction
+
+            if line_color and len(line_color) == 3:
+                camera.line_color_r = line_color[0]
+                camera.line_color_g = line_color[1]
+                camera.line_color_b = line_color[2]
+
+            if line_thickness is not None:
+                camera.line_thickness = line_thickness
+
+            if cooldown_frames is not None:
+                camera.cooldown_frames = cooldown_frames
+
+            if min_track_length is not None:
+                camera.min_track_length = min_track_length
 
             self.session.add(camera)
             self.session.commit()
@@ -305,6 +375,76 @@ class PostgreSQLDatabase:
         except Exception as e:
             self.logger.error(f"Error getting cameras: {e}")
             return []
+
+    def update_camera_counting_lines(self, camera_id: str, outside_line: list = None,
+                                     inside_line: list = None, in_direction: str = None,
+                                     line_color: list = None, line_thickness: int = None,
+                                     cooldown_frames: int = None, min_track_length: int = None) -> bool:
+        """
+        Update counting line configuration for a camera
+
+        Args:
+            camera_id: Camera identifier
+            outside_line: Outside counting line [x1, y1, x2, y2] (normalized 0.0-1.0)
+            inside_line: Inside counting line [x1, y1, x2, y2] (normalized 0.0-1.0)
+            in_direction: Direction that counts as IN ('up', 'down', 'left', 'right')
+            line_color: Line color [r, g, b] (0-255)
+            line_thickness: Line thickness in pixels
+            cooldown_frames: Frames to wait before counting same person again
+            min_track_length: Minimum track length before counting
+
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.session:
+            return False
+
+        try:
+            camera = self.get_camera(camera_id)
+            if not camera:
+                self.logger.error(f"Camera not found: {camera_id}")
+                return False
+
+            # Update counting line configuration
+            if outside_line and len(outside_line) == 4:
+                camera.outside_line_x1 = outside_line[0]
+                camera.outside_line_y1 = outside_line[1]
+                camera.outside_line_x2 = outside_line[2]
+                camera.outside_line_y2 = outside_line[3]
+
+            if inside_line and len(inside_line) == 4:
+                camera.inside_line_x1 = inside_line[0]
+                camera.inside_line_y1 = inside_line[1]
+                camera.inside_line_x2 = inside_line[2]
+                camera.inside_line_y2 = inside_line[3]
+
+            if in_direction:
+                camera.in_direction = in_direction
+
+            if line_color and len(line_color) == 3:
+                camera.line_color_r = line_color[0]
+                camera.line_color_g = line_color[1]
+                camera.line_color_b = line_color[2]
+
+            if line_thickness is not None:
+                camera.line_thickness = line_thickness
+
+            if cooldown_frames is not None:
+                camera.cooldown_frames = cooldown_frames
+
+            if min_track_length is not None:
+                camera.min_track_length = min_track_length
+
+            camera.updated_at = datetime.now()
+            self.session.commit()
+
+            self.logger.info(f"Updated counting lines for camera: {camera_id}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error updating camera counting lines: {e}")
+            self.session.rollback()
+            return False
 
     # ========================================================================
     # ORGANIZATION MANAGEMENT

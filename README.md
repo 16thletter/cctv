@@ -13,7 +13,23 @@ An intelligent people counting and attendance tracking system using computer vis
 - **Multi-Organization Support** with organization-specific cameras
 - **PostgreSQL Database** with pgvector for face embeddings
 - **Dynamic Camera Management** - add cameras without config editing
-- **REST API** for camera and organization management
+- **REST API** for camera and organization man
+- ✅ Add cameras via CLI: `manage_cameras.py add`
+- ✅ Add cameras via API: `POST /api/cameras`
+- ✅ No need to touch `config.yaml`
+
+### **2. Truly Dynamic**
+- ✅ Cameras loaded from database at runtime
+- ✅ Add/remove cameras without code changes
+- ✅ Filter by organization dynamically
+
+### **3. Secure**
+- ✅ RTSP URLs in `.env` file (not in database)
+- ✅ Environment variable names in database
+- ✅ No passwords in version control
+
+### **4. Scalable**
+- ✅ Handle 1 or 100 cameras easilyagement
 - **Web Dashboard** for real-time visualization
 
 ### **Advanced Capabilities**
@@ -74,11 +90,14 @@ See **[SETUP.md](SETUP.md)** for detailed installation instructions.
 
 ```bash
 # Create virtual environment
-python -m venv venv
+python3 -m venv venv
 source venv/bin/activate  # Linux/Mac
 # venv\Scripts\activate  # Windows
 
-# Install dependencies
+# Install dependencies (automated)
+./install_dependencies.sh
+
+# Or install manually
 pip install -r requirements.txt
 pip install -r requirements_face.txt
 ```

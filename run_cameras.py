@@ -37,9 +37,12 @@ def camera_process_worker(camera_config: dict, app_config: dict):
         app_config: Application-wide configuration
     """
     import cv2
+    import numpy as np
+    from src.detector import PersonDetector
+    from src.tracker import ByteTracker
     from src.counter import PeopleCounter
     from src.database_pg import PostgreSQLDatabase
-    from src.face_recognition import FaceRecognitionSystem
+    from src.face_recognition import FaceRecognizer
     
     # Setup logging for this process
     logger = logging.getLogger(f"Camera-{camera_config['id']}")
@@ -49,40 +52,90 @@ def camera_process_worker(camera_config: dict, app_config: dict):
     
     # Initialize database connection for this camera
     db = PostgreSQLDatabase(app_config)
-    
+
+    # Initialize detector
+    detector = PersonDetector(app_config)
+    logger.info("✓ Detector initialized")
+
+    # Initialize tracker
+    tracker = ByteTracker(app_config)
+    logger.info("✓ Tracker initialized")
+
     # Initialize face recognition if enabled
+    # TODO: Integrate face recognition with counter
     face_recognition = None
     if app_config.get('face_recognition', {}).get('enabled', False):
         try:
-            face_recognition = FaceRecognitionSystem(
-                model_name=app_config['face_recognition'].get('model', 'buffalo_l'),
-                db=db
-            )
-            logger.info("Face recognition enabled")
+            face_recognition = FaceRecognizer(config=app_config)
+            logger.info("✓ Face recognition initialized (integration pending)")
         except Exception as e:
             logger.error(f"Failed to initialize face recognition: {e}")
     
-    # Initialize people counter
-    counter = PeopleCounter(
-        config=app_config,
-        camera_id=camera_config['id'],
-        db=db,
-        face_recognition=face_recognition
-    )
-    
+    # Get counting line coordinates from camera-specific config or fall back to global config
+    # Camera-specific settings override global defaults
+    if 'counting_line' in camera_config:
+        # Use camera-specific counting lines from database
+        counting_line_config = camera_config['counting_line']
+        logger.info("Using camera-specific counting lines from database")
+    else:
+        # Use default counting lines from config.yaml
+        counting_line_config = app_config.get('counting_line', {})
+        logger.info("Using default counting lines from config.yaml")
+
+    outside_line = counting_line_config.get('outside_line')
+    inside_line = counting_line_config.get('inside_line')
+
     # Open video source
     source = camera_config['source']
     logger.info(f"Opening video source: {source}")
-    
+
     cap = cv2.VideoCapture(source)
     if not cap.isOpened():
         logger.error(f"Failed to open video source: {source}")
         return
-    
+
+    # Get frame dimensions
+    ret, frame = cap.read()
+    if not ret:
+        logger.error("Failed to read first frame")
+        return
+
+    frame_height, frame_width = frame.shape[:2]
+    logger.info(f"Frame dimensions: {frame_width}x{frame_height}")
+
+    # Convert normalized coordinates to pixel coordinates
+    if outside_line and inside_line:
+        outside_line_px = [
+            int(outside_line[0] * frame_width),
+            int(outside_line[1] * frame_height),
+            int(outside_line[2] * frame_width),
+            int(outside_line[3] * frame_height)
+        ]
+        inside_line_px = [
+            int(inside_line[0] * frame_width),
+            int(inside_line[1] * frame_height),
+            int(inside_line[2] * frame_width),
+            int(inside_line[3] * frame_height)
+        ]
+    else:
+        logger.error("Counting lines not configured")
+        return
+
+    # Initialize people counter
+    counter = PeopleCounter(
+        config=app_config,
+        line_coords=None,  # Not used in two-line mode
+        outside_line_coords=outside_line_px,
+        inside_line_coords=inside_line_px
+    )
+    logger.info("✓ Counter initialized")
+
     logger.info("✓ Camera started successfully")
-    
+
     # Main processing loop
     frame_count = 0
+    skip_frames = app_config.get('processing', {}).get('skip_frames', 2)
+
     try:
         while True:
             ret, frame = cap.read()
@@ -92,24 +145,241 @@ def camera_process_worker(camera_config: dict, app_config: dict):
                 time.sleep(5)  # Wait before reconnecting
                 cap = cv2.VideoCapture(source)
                 continue
-            
-            # Process frame
-            processed_frame = counter.process_frame(frame)
-            
-            # Display frame (optional - can be disabled for headless operation)
-            if app_config.get('display', {}).get('show_window', False):
-                window_name = f"Camera: {camera_config['id']} - {camera_config.get('location', '')}"
-                cv2.imshow(window_name, processed_frame)
-                
-                if cv2.waitKey(1) & 0xFF == ord('q'):
-                    break
-            
+
             frame_count += 1
-            
+
+            # Skip frames if configured
+            if frame_count % skip_frames != 0:
+                continue
+
+            # Detect persons
+            detections = detector.detect(frame)
+
+            # Convert detections to numpy array for tracker
+            # Detector returns: [x1, y1, x2, y2, confidence, class_id]
+            if len(detections) > 0:
+                dets = np.array([[d[0], d[1], d[2], d[3], d[4]] for d in detections])
+            else:
+                dets = np.empty((0, 5))
+
+            # Update tracker
+            tracks = tracker.update(dets)
+
+            # Update counter
+            events = counter.update(tracks, frame_count)
+
+            # Log events to database
+            for event in events:
+                db.log_counting_event(camera_id=camera_config['db_id'], event=event)
+
+            # Draw annotations on frame
+            annotated_frame = frame.copy()
+
+            # Draw counting lines
+            cv2.line(annotated_frame,
+                    (outside_line_px[0], outside_line_px[1]),
+                    (outside_line_px[2], outside_line_px[3]),
+                    (255, 0, 0), 3)  # Blue for outside line
+            cv2.line(annotated_frame,
+                    (inside_line_px[0], inside_line_px[1]),
+                    (inside_line_px[2], inside_line_px[3]),
+                    (0, 255, 255), 3)  # Yellow for inside line
+
+            # Draw transition zone (semi-transparent green overlay)
+            overlay = annotated_frame.copy()
+            in_direction = counting_line_config.get('in_direction', 'down')
+
+            if in_direction in ['down', 'up']:
+                # Horizontal lines - draw rectangle between them
+                outside_y = outside_line_px[1]
+                inside_y = inside_line_px[1]
+                cv2.rectangle(overlay, (0, min(outside_y, inside_y)),
+                            (frame_width, max(outside_y, inside_y)),
+                            (0, 255, 0), -1)
+            elif in_direction in ['left', 'right']:
+                # Vertical lines - draw rectangle between them
+                outside_x = outside_line_px[0]
+                inside_x = inside_line_px[0]
+                cv2.rectangle(overlay, (min(outside_x, inside_x), 0),
+                            (max(outside_x, inside_x), frame_height),
+                            (0, 255, 0), -1)
+
+            # Blend overlay with original frame (15% opacity)
+            cv2.addWeighted(overlay, 0.15, annotated_frame, 0.85, 0, annotated_frame)
+
+            # Draw zone labels
+            mid_x = frame_width // 2
+            mid_y = frame_height // 2
+
+            if in_direction == 'down':
+                # Horizontal lines - labels above, between, and below
+                outside_y = outside_line_px[1]
+                inside_y = inside_line_px[1]
+                transition_y = (outside_y + inside_y) // 2
+
+                # OUTSIDE label (above outside line)
+                cv2.rectangle(annotated_frame, (mid_x - 80, outside_y - 60),
+                            (mid_x + 80, outside_y - 25), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "OUTSIDE", (mid_x - 70, outside_y - 35),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+
+                # TRANSITION label (between lines)
+                cv2.rectangle(annotated_frame, (mid_x - 100, transition_y - 15),
+                            (mid_x + 100, transition_y + 15), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "TRANSITION", (mid_x - 90, transition_y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+                # INSIDE label (below inside line)
+                cv2.rectangle(annotated_frame, (mid_x - 70, inside_y + 25),
+                            (mid_x + 70, inside_y + 60), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "INSIDE", (mid_x - 60, inside_y + 50),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+            elif in_direction == 'up':
+                # Horizontal lines - labels reversed for upward direction
+                outside_y = outside_line_px[1]
+                inside_y = inside_line_px[1]
+                transition_y = (outside_y + inside_y) // 2
+
+                # OUTSIDE label (below outside line)
+                cv2.rectangle(annotated_frame, (mid_x - 80, outside_y + 25),
+                            (mid_x + 80, outside_y + 60), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "OUTSIDE", (mid_x - 70, outside_y + 50),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (255, 0, 0), 2)
+
+                # TRANSITION label (between lines)
+                cv2.rectangle(annotated_frame, (mid_x - 100, transition_y - 15),
+                            (mid_x + 100, transition_y + 15), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "TRANSITION", (mid_x - 90, transition_y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+
+                # INSIDE label (above inside line)
+                cv2.rectangle(annotated_frame, (mid_x - 70, inside_y - 60),
+                            (mid_x + 70, inside_y - 25), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "INSIDE", (mid_x - 60, inside_y - 35),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2)
+
+            elif in_direction == 'right':
+                # Vertical lines - labels left, center, and right
+                outside_x = outside_line_px[0]
+                inside_x = inside_line_px[0]
+                transition_x = (outside_x + inside_x) // 2
+
+                # OUTSIDE label (left of outside line)
+                cv2.rectangle(annotated_frame, (outside_x - 120, mid_y - 20),
+                            (outside_x - 10, mid_y + 20), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "OUTSIDE", (outside_x - 110, mid_y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+                # TRANSITION label (between lines)
+                cv2.rectangle(annotated_frame, (transition_x - 80, mid_y - 20),
+                            (transition_x + 80, mid_y + 20), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "TRANSITION", (transition_x - 70, mid_y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+                # INSIDE label (right of inside line)
+                cv2.rectangle(annotated_frame, (inside_x + 10, mid_y - 20),
+                            (inside_x + 110, mid_y + 20), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "INSIDE", (inside_x + 20, mid_y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+            elif in_direction == 'left':
+                # Vertical lines - labels reversed for leftward direction
+                outside_x = outside_line_px[0]
+                inside_x = inside_line_px[0]
+                transition_x = (outside_x + inside_x) // 2
+
+                # OUTSIDE label (right of outside line)
+                cv2.rectangle(annotated_frame, (outside_x + 10, mid_y - 20),
+                            (outside_x + 120, mid_y + 20), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "OUTSIDE", (outside_x + 20, mid_y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 0, 0), 2)
+
+                # TRANSITION label (between lines)
+                cv2.rectangle(annotated_frame, (transition_x - 80, mid_y - 20),
+                            (transition_x + 80, mid_y + 20), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "TRANSITION", (transition_x - 70, mid_y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 2)
+
+                # INSIDE label (left of inside line)
+                cv2.rectangle(annotated_frame, (inside_x - 110, mid_y - 20),
+                            (inside_x - 10, mid_y + 20), (0, 0, 0), -1)
+                cv2.putText(annotated_frame, "INSIDE", (inside_x - 100, mid_y + 5),
+                           cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+
+            # Draw tracks with color-coded states
+            if len(tracks) > 0:
+                for track in tracks:
+                    x1, y1, x2, y2, track_id = track
+                    x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
+                    track_id = int(track_id)
+
+                    # Calculate centroid
+                    cx = int((x1 + x2) / 2)
+                    cy = int((y1 + y2) / 2)
+
+                    # Get zone and state for this track
+                    zone = counter._get_zone((cx, cy))
+                    state_info = counter.track_states.get(track_id, {'state': None, 'zone_frames': 0})
+                    state = state_info['state']
+                    zone_frames = state_info['zone_frames']
+                    direction = state_info.get('direction', '')
+
+                    # Color based on state and direction
+                    if state == 'transition':
+                        if direction == 'entering':
+                            box_color = (0, 255, 0)  # Green for ENTERING
+                            state_label = f"ENTERING ({zone_frames}f)"
+                        elif direction == 'exiting':
+                            box_color = (0, 165, 255)  # Orange for EXITING
+                            state_label = f"EXITING ({zone_frames}f)"
+                        else:
+                            box_color = (0, 255, 0)  # Green for transition
+                            state_label = f"transition ({zone_frames}f)"
+                    elif state == 'outside':
+                        box_color = (255, 0, 0)  # Blue for OUTSIDE
+                        state_label = f"outside ({zone_frames}f)"
+                    elif state == 'inside':
+                        box_color = (0, 255, 255)  # Yellow for INSIDE
+                        state_label = f"inside ({zone_frames}f)"
+                    else:
+                        box_color = (128, 128, 128)  # Gray for unknown/initializing
+                        state_label = "initializing"
+
+                    # Draw bounding box with state-based color
+                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), box_color, 2)
+
+                    # Draw track ID and state
+                    cv2.putText(annotated_frame, f"ID: {track_id} - {state_label}",
+                               (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                               0.5, box_color, 2)
+
+                    # Draw centroid
+                    cv2.circle(annotated_frame, (cx, cy), 5, (0, 0, 255), -1)
+
+            # Draw counts
+            counts = counter.get_counts()
+            cv2.rectangle(annotated_frame, (10, 10), (300, 120), (0, 0, 0), -1)
+            cv2.rectangle(annotated_frame, (10, 10), (300, 120), (255, 255, 255), 2)
+            cv2.putText(annotated_frame, f"IN: {counts['in']}",
+                       (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
+            cv2.putText(annotated_frame, f"OUT: {counts['out']}",
+                       (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
+            cv2.putText(annotated_frame, f"OCCUPANCY: {counts['occupancy']}",
+                       (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+
+            # Display frame
+            if app_config.get('display', {}).get('show_video', True):
+                window_name = f"Camera: {camera_config['id']} - {camera_config.get('location', '')}"
+                cv2.imshow(window_name, annotated_frame)
+
+                if cv2.waitKey(1) & 0xFF == ord('q'):
+                    logger.info("User pressed 'q' to quit")
+                    break
+
             # Log stats every 100 frames
             if frame_count % 100 == 0:
-                stats = counter.get_stats()
-                logger.info(f"Processed {frame_count} frames | IN: {stats['in']} | OUT: {stats['out']}")
+                logger.info(f"Processed {frame_count} frames | IN: {counts['in']} | OUT: {counts['out']}")
     
     except KeyboardInterrupt:
         logger.info("Interrupted by user")

@@ -1,6 +1,9 @@
 # Core Dependencies (Python 3.12 compatible)
-opencv-python>=4.8.0
+# NumPy and OpenCV - compatible with InsightFace and Ultralytics
 numpy>=1.26.0
+opencv-python>=4.9.0
+
+# YOLOv8 and PyTorch
 ultralytics>=8.0.0
 torch>=2.1.0
 torchvision>=0.16.0
