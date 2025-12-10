@@ -12,6 +12,8 @@ torchvision>=0.16.0
 # Tracking
 filterpy>=1.4.5
 scipy>=1.11.0
+lap>=0.4.0  # Linear Assignment Problem solver for Strong SORT
+gdown>=4.7.1  # For downloading ReID models
 
 # Database
 sqlalchemy>=2.0.0

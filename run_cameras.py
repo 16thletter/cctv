@@ -39,7 +39,7 @@ def camera_process_worker(camera_config: dict, app_config: dict):
     import cv2
     import numpy as np
     from src.detector import PersonDetector
-    from src.tracker import ByteTracker
+    from src.strong_sort import StrongSORT  # GPU-accelerated Strong SORT with ReID
     from src.counter import PeopleCounter
     from src.database_pg import PostgreSQLDatabase
     from src.face_recognition import FaceRecognizer
@@ -57,9 +57,9 @@ def camera_process_worker(camera_config: dict, app_config: dict):
     detector = PersonDetector(app_config)
     logger.info("✓ Detector initialized")
 
-    # Initialize tracker
-    tracker = ByteTracker(app_config)
-    logger.info("✓ Tracker initialized")
+    # Initialize tracker (Strong SORT with GPU-accelerated ReID)
+    tracker = StrongSORT(app_config)
+    logger.info("✓ Strong SORT tracker initialized with GPU-accelerated ReID")
 
     # Initialize face recognition if enabled
     # TODO: Integrate face recognition with counter
@@ -162,8 +162,8 @@ def camera_process_worker(camera_config: dict, app_config: dict):
             else:
                 dets = np.empty((0, 5))
 
-            # Update tracker
-            tracks = tracker.update(dets)
+            # Update tracker with frame for appearance features (Strong SORT)
+            tracks = tracker.update(dets, frame)
 
             # Update counter
             events = counter.update(tracks, frame_count)

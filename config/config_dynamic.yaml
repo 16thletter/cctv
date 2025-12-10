@@ -49,13 +49,13 @@ face_recognition:
 # ============================================================================
 detection:
   model: yolov8n.pt  # YOLOv8 model (yolov8n, yolov8s, yolov8m, yolov8l, yolov8x)
-  device: cpu  # 'cpu' or 'cuda' or '0' for GPU
-  imgsz: 480  # Input image size (640, 480, 320)
+  device: cuda  # 'cpu' or 'cuda' or '0' for GPU - GPU ENABLED
+  imgsz: 640  # Input image size (640, 480, 320) - Increased for GPU
   confidence: 0.3  # Detection confidence threshold (0.0-1.0)
   classes: [0]  # Class IDs to detect (0 = person)
 
 # ============================================================================
-# TRACKING CONFIGURATION (ByteTrack)
+# TRACKING CONFIGURATION (Strong SORT with ReID)
 # ============================================================================
 tracking:
   track_high_thresh: 0.4  # High confidence threshold for track association
@@ -65,6 +65,11 @@ tracking:
   max_age: 90  # Maximum frames to keep track alive without detection
   min_hits: 1  # Minimum detections before track is confirmed
   iou_threshold: 0.3  # IoU threshold for track matching
+
+  # Strong SORT appearance-based tracking (GPU-accelerated ReID)
+  lambda_iou: 0.98  # Weight for IoU-based matching (0.0-1.0)
+  lambda_app: 0.02  # Weight for appearance-based matching (0.0-1.0)
+  appearance_thresh: 0.25  # Appearance distance threshold
 
 # ============================================================================
 # COUNTING LINE CONFIGURATION (DEFAULT)

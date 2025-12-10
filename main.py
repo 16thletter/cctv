@@ -12,7 +12,7 @@ from pathlib import Path
 
 from src.utils import load_config, setup_logging, convert_line_coords, create_directories
 from src.detector import PersonDetector
-from src.tracker import SORTTracker
+from src.strong_sort import StrongSORT  # GPU-accelerated Strong SORT with ReID
 from src.counter import PeopleCounter
 from src.database import Database
 
@@ -42,7 +42,7 @@ class PeopleCounterApp:
 
         # Initialize components
         self.detector = PersonDetector(self.config)
-        self.tracker = SORTTracker(self.config)
+        self.tracker = StrongSORT(self.config)  # GPU-accelerated Strong SORT
         self.database = Database(self.config)
         
         # Video capture
@@ -307,8 +307,8 @@ class PeopleCounterApp:
         else:
             dets = np.empty((0, 5))
 
-        # Update tracker
-        tracks = self.tracker.update(dets)
+        # Update tracker with frame for appearance features (Strong SORT)
+        tracks = self.tracker.update(dets, frame)
 
         # Update counter
         events = self.counter.update(tracks, self.frame_count)

@@ -109,8 +109,8 @@ detection:
   classes:
   - 0
   confidence: 0.3  # Lowered from 0.4 to detect people further away (outside zone)
-  device: cpu
-  imgsz: 480
+  device: cuda  # GPU acceleration enabled (RTX 5050)
+  imgsz: 640  # Increased from 480 for better accuracy with GPU
   model: yolov8n.pt
 display:
   output_path: output/output.avi
@@ -142,3 +142,7 @@ tracking:
   track_low_thresh: 0.05  # Lowered from 0.1 for better recovery
   new_track_thresh: 0.4  # Lowered from 0.5 to create tracks more easily
   track_buffer: 45  # Increased from 30 to recover lost tracks longer
+  # Strong SORT appearance-based tracking (GPU-accelerated ReID)
+  lambda_iou: 0.98  # Weight for IoU-based matching
+  lambda_app: 0.02  # Weight for appearance-based matching
+  appearance_thresh: 0.25  # Appearance distance threshold
