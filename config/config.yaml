@@ -119,7 +119,7 @@ display:
   show_detections: true
   show_tracks: true
   show_trails: true
-  show_video: true
+  show_video: true  # Display video window with annotations
   trail_length: 30
 logging:
   console: true

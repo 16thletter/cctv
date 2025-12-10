@@ -1,20 +1,22 @@
 # Face Recognition Dependencies
-# Note: Install requirements.txt FIRST to get correct numpy/opencv versions
 insightface==0.7.3
-onnxruntime>=1.17.0  # Use onnxruntime-gpu>=1.17.0 for GPU support
+
+# FIXED VERSIONS REQUIRED
+opencv-python==4.7.0.72
+albumentations==1.3.1
+albucore==0.0.6
+
+onnxruntime>=1.17.0
 onnx>=1.15.0
 
-# PostgreSQL Dependencies
+# PostgreSQL
 psycopg2-binary>=2.9.9
 sqlalchemy>=2.0.23
 pgvector>=0.2.4
 
-# Utilities
+# Utils
 python-dotenv>=1.0.0
 pyyaml>=6.0
 tabulate>=0.9.0
-
-# REST API (Optional - for camera_api.py)
 flask>=3.0.0
 flask-cors>=4.0.0
-

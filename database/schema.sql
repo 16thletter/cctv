@@ -5,21 +5,6 @@
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ============================================================================
--- CAMERAS TABLE
--- ============================================================================
-CREATE TABLE IF NOT EXISTS cameras (
-    id SERIAL PRIMARY KEY,
-    camera_id VARCHAR(50) UNIQUE NOT NULL,
-    organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
-    location VARCHAR(255),
-    description TEXT,
-    rtsp_url_env VARCHAR(100),  -- Environment variable name for RTSP URL (e.g., 'CAMERA_MAIN_URL')
-    is_active BOOLEAN DEFAULT true,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-);
-
--- ============================================================================
 -- ORGANIZATIONS TABLE
 -- ============================================================================
 CREATE TABLE IF NOT EXISTS organizations (
@@ -30,6 +15,21 @@ CREATE TABLE IF NOT EXISTS organizations (
     contact_person VARCHAR(255),
     contact_email VARCHAR(255),
     contact_phone VARCHAR(50),
+    is_active BOOLEAN DEFAULT true,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+-- ============================================================================
+-- CAMERAS TABLE
+-- ============================================================================
+CREATE TABLE IF NOT EXISTS cameras (
+    id SERIAL PRIMARY KEY,
+    camera_id VARCHAR(50) UNIQUE NOT NULL,
+    organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
+    location VARCHAR(255),
+    description TEXT,
+    rtsp_url_env VARCHAR(100),  -- Environment variable name for RTSP URL (e.g., 'CAMERA_MAIN_URL')
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
