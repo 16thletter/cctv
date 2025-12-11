@@ -3,11 +3,18 @@
 Face Enrollment Script
 Register known persons and their face embeddings into the database
 """
+import os
 import argparse
 import cv2
 import logging
 from pathlib import Path
 import sys
+
+# Set CUDA library path for WSL (must be done before importing onnxruntime)
+if 'LD_LIBRARY_PATH' not in os.environ:
+    os.environ['LD_LIBRARY_PATH'] = '/usr/lib/wsl/lib'
+elif '/usr/lib/wsl/lib' not in os.environ['LD_LIBRARY_PATH']:
+    os.environ['LD_LIBRARY_PATH'] = '/usr/lib/wsl/lib:' + os.environ['LD_LIBRARY_PATH']
 
 from src.utils import load_config
 from src.database_pg import PostgreSQLDatabase

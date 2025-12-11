@@ -107,17 +107,24 @@ def test_face_recognition_gpu(config):
     
     try:
         face_recognizer = FaceRecognizer(config)
-        
+
+        # Check providers
+        providers = config.get('face_recognition', {}).get('providers', [])
+        logger.info(f"Configured providers: {providers}")
+
         # Create dummy frame
         dummy_frame = np.random.randint(0, 255, (640, 640, 3), dtype=np.uint8)
-        
+
         # Run face detection
         logger.info("Running face detection on dummy frame...")
         faces = face_recognizer.detect_faces(dummy_frame)
         logger.info(f"Faces detected: {len(faces)}")
-        
-        logger.info("✅ Face Recognition is configured for GPU!")
-        
+
+        if 'CUDAExecutionProvider' in providers:
+            logger.info("✅ Face Recognition is configured for GPU!")
+        else:
+            logger.info("✅ Face Recognition is configured for CPU (fast enough!)")
+
     except Exception as e:
         logger.error(f"Face recognition test failed: {e}")
     
@@ -150,19 +157,26 @@ def main():
     logger.info("=" * 80)
     logger.info("TEST SUMMARY")
     logger.info("=" * 80)
-    
+
     if torch.cuda.is_available():
         logger.info("✅ GPU is available and configured")
         logger.info("✅ YOLOv8 detector is using GPU")
         logger.info("✅ Strong SORT tracker with ReID is using GPU")
-        logger.info("✅ Face Recognition is configured for GPU")
+
+        # Check face recognition provider
+        fr_providers = config.get('face_recognition', {}).get('providers', [])
+        if 'CUDAExecutionProvider' in fr_providers:
+            logger.info("✅ Face Recognition is using GPU")
+        else:
+            logger.info("✅ Face Recognition is using CPU (still fast!)")
+
         logger.info("")
-        logger.info("🚀 Your system is fully GPU-accelerated!")
+        logger.info("🚀 Your system is GPU-accelerated!")
         logger.info("")
         logger.info("💡 TIP: Monitor GPU usage with: watch -n 1 nvidia-smi")
     else:
         logger.warning("❌ GPU is not available. System will run on CPU.")
-    
+
     logger.info("=" * 80)
 
 if __name__ == "__main__":

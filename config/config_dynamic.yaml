@@ -35,22 +35,23 @@ face_recognition:
   enabled: true
   model: buffalo_l  # InsightFace model (buffalo_l, buffalo_s, buffalo_sc)
   providers:
-    - CUDAExecutionProvider  # GPU acceleration (comment out for CPU only)
-    - CPUExecutionProvider
-  det_size: [640, 640]  # Face detection size (larger = more accurate, slower)
-  confidence_threshold: 0.6  # Face matching threshold (0.0-1.0, higher = stricter)
+    - CUDAExecutionProvider  # GPU acceleration enabled ✅
+    - CPUExecutionProvider   # Fallback
+  det_size: [640, 640]  # Detection size for accuracy
+  confidence_threshold: 0.5  # Face matching threshold (balanced for accuracy)
   min_face_size: 50  # Minimum face size in pixels
-  max_faces_per_frame: 10  # Maximum faces to process per frame
-  save_snapshots: true  # Save face snapshots on detection
+  max_faces_per_frame: 5  # Maximum faces to process per frame
+  save_snapshots: false  # Disabled to save I/O time
   snapshot_dir: snapshots/faces
 
 # ============================================================================
 # PERSON DETECTION CONFIGURATION (YOLOv8)
 # ============================================================================
 detection:
-  model: yolov8n.pt  # YOLOv8 model (yolov8n, yolov8s, yolov8m, yolov8l, yolov8x)
+  model: yolov8n.pt  # OPTIMIZED: Changed back to nano for speed (yolov8n, yolov8s, yolov8m)
+                     # yolov8n = Fastest model (~10-15ms vs 20-30ms for yolov8m)
   device: cuda  # 'cpu' or 'cuda' or '0' for GPU - GPU ENABLED
-  imgsz: 640  # Input image size (640, 480, 320) - Increased for GPU
+  imgsz: 640  # Input image size (640, 480, 320)
   confidence: 0.3  # Detection confidence threshold (0.0-1.0)
   classes: [0]  # Class IDs to detect (0 = person)
 
@@ -111,7 +112,7 @@ display:
 # PROCESSING CONFIGURATION
 # ============================================================================
 processing:
-  skip_frames: 2  # Process every Nth frame (0 = process all frames)
+  skip_frames: 1  # OPTIMIZED: Process every frame (was 2, causing lag)
   num_threads: 4  # Number of processing threads
   roi_enabled: false  # Enable Region of Interest
   roi_coordinates: [0, 0, 1, 1]  # ROI coordinates (normalized)

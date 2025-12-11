@@ -136,6 +136,9 @@ def camera_process_worker(camera_config: dict, app_config: dict):
     frame_count = 0
     skip_frames = app_config.get('processing', {}).get('skip_frames', 2)
 
+    # Cache for face matches (persists between frames)
+    face_matches_cache = {}  # {track_id: (person_id, confidence, last_updated_frame)}
+
     try:
         while True:
             ret, frame = cap.read()
@@ -165,11 +168,90 @@ def camera_process_worker(camera_config: dict, app_config: dict):
             # Update tracker with frame for appearance features (Strong SORT)
             tracks = tracker.update(dets, frame)
 
+            # Face recognition: Match faces in tracks against database
+            # OPTIMIZATION: Run face recognition every 5 frames to reduce CPU load
+            # Use cached results for other frames
+            face_matches = {}  # {track_id: (person_id, confidence)}
+
+            if face_recognition and face_recognition.is_enabled() and len(tracks) > 0:
+                # Run face recognition every 5 frames (balanced for speed and accuracy)
+                if frame_count % 5 == 0:
+                    try:
+                        logger.info(f"[FR] Frame {frame_count}: Running face recognition on {len(tracks)} tracks")
+                        new_matches = face_recognition.match_faces_in_tracks(frame, tracks, db)
+                        logger.info(f"[FR] Frame {frame_count}: Returned {len(new_matches)} matches")
+
+                        # Update cache with new matches
+                        for track_id, (person_id, confidence) in new_matches.items():
+                            face_matches_cache[track_id] = (person_id, confidence, frame_count)
+                            logger.debug(f"Cached match: Track {track_id} -> Person {person_id} (confidence: {confidence:.2f})")
+
+                        # Log face detections
+                        for track in tracks:
+                            track_id = int(track[4])
+                            if track_id in new_matches:
+                                person_id, confidence = new_matches[track_id]
+                                if person_id:
+                                    # Person identified!
+                                    person = db.get_person(person_id)
+                                    if person:
+                                        logger.info(f"✓✓✓ IDENTIFIED: {person.name} (Track {track_id}, Confidence: {confidence:.2f}) ✓✓✓")
+
+                                        # Log face detection to database
+                                        bbox = (int(track[0]), int(track[1]), int(track[2]), int(track[3]))
+                                        db.log_face_detection(
+                                            camera_id=camera_config['db_id'],
+                                            person_id=person_id,
+                                            track_id=track_id,
+                                            confidence=confidence,
+                                            detection_score=confidence,
+                                            bbox=bbox,
+                                            frame_number=frame_count
+                                        )
+                                else:
+                                    logger.debug(f"Track {track_id}: No person match (unknown face)")
+                    except Exception as e:
+                        logger.error(f"Face recognition error: {e}", exc_info=True)
+
+                # Use cached results for all tracks (including non-recognition frames)
+                for track in tracks:
+                    track_id = int(track[4])
+                    if track_id in face_matches_cache:
+                        person_id, confidence, last_frame = face_matches_cache[track_id]
+                        # Use cache if updated within last 30 frames (~1 second)
+                        if frame_count - last_frame < 30:
+                            face_matches[track_id] = (person_id, confidence)
+
+                # Clean old entries from cache (older than 90 frames)
+                face_matches_cache = {
+                    tid: data for tid, data in face_matches_cache.items()
+                    if frame_count - data[2] < 90
+                }
+
             # Update counter
             events = counter.update(tracks, frame_count)
 
-            # Log events to database
+            # Log events to database with person identification
             for event in events:
+                track_id = event.get('track_id')
+                person_id = None
+                confidence = None
+
+                # Check if this track has a person_id from face recognition
+                if track_id and track_id in face_matches:
+                    person_id, confidence = face_matches[track_id]
+
+                # Log entry/exit event with person identification
+                db.log_entry_exit(
+                    camera_id=camera_config['db_id'],
+                    event_type=event['type'],
+                    track_id=track_id,
+                    person_id=person_id,
+                    confidence=confidence,
+                    position=(event.get('position_x'), event.get('position_y'))
+                )
+
+                # Also log to counting events table (for backward compatibility)
                 db.log_counting_event(camera_id=camera_config['db_id'], event=event)
 
             # Draw annotations on frame
@@ -346,12 +428,57 @@ def camera_process_worker(camera_config: dict, app_config: dict):
                         box_color = (128, 128, 128)  # Gray for unknown/initializing
                         state_label = "initializing"
 
-                    # Draw bounding box with state-based color
-                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), box_color, 2)
+                    # Check if person is identified via face recognition
+                    person_name = None
+                    face_confidence = None
+                    is_identified = False
 
-                    # Draw track ID and state
+                    if track_id in face_matches:
+                        person_id, face_confidence = face_matches[track_id]
+                        if person_id:
+                            person = db.get_person(person_id)
+                            if person:
+                                person_name = person.name
+                                is_identified = True
+
+                    # Set display name and colors
+                    if is_identified:
+                        # Identified person
+                        display_name = f"{person_name} ({face_confidence:.2f})"
+                        name_bg_color = (255, 0, 255)  # Magenta background
+                        name_text_color = (255, 255, 255)  # White text
+                        box_color = (255, 0, 255)  # Magenta box
+                        box_thickness = 3
+                    else:
+                        # Anonymous person
+                        display_name = "Anonymous"
+                        name_bg_color = (128, 128, 128)  # Gray background
+                        name_text_color = (255, 255, 255)  # White text
+                        # Keep original state-based box color
+                        box_thickness = 2
+
+                    # Draw bounding box
+                    cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), box_color, box_thickness)
+
+                    # Draw name label (always shown - either person name or "Anonymous")
+                    label_y = y1 - 10
+
+                    # Calculate text size
+                    (text_width, text_height), _ = cv2.getTextSize(display_name, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)
+
+                    # Draw background rectangle for name
+                    cv2.rectangle(annotated_frame, (x1, label_y - text_height - 5),
+                                 (x1 + text_width + 10, label_y + 5), name_bg_color, -1)
+
+                    # Draw name text (WHITE text on colored background)
+                    cv2.putText(annotated_frame, display_name,
+                               (x1 + 5, label_y), cv2.FONT_HERSHEY_SIMPLEX,
+                               0.8, name_text_color, 2)
+                    label_y -= (text_height + 10)
+
+                    # Draw track ID and state below name
                     cv2.putText(annotated_frame, f"ID: {track_id} - {state_label}",
-                               (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX,
+                               (x1, label_y), cv2.FONT_HERSHEY_SIMPLEX,
                                0.5, box_color, 2)
 
                     # Draw centroid
@@ -359,14 +486,30 @@ def camera_process_worker(camera_config: dict, app_config: dict):
 
             # Draw counts
             counts = counter.get_counts()
-            cv2.rectangle(annotated_frame, (10, 10), (300, 120), (0, 0, 0), -1)
-            cv2.rectangle(annotated_frame, (10, 10), (300, 120), (255, 255, 255), 2)
+
+            # Count identified vs anonymous persons in current frame
+            identified_count = sum(1 for tid in face_matches if face_matches[tid][0] is not None)
+            total_tracked = len(tracks)
+            anonymous_count = total_tracked - identified_count
+
+            # Adjust info box size if face recognition is enabled
+            info_height = 180 if face_recognition and face_recognition.is_enabled() else 120
+
+            cv2.rectangle(annotated_frame, (10, 10), (350, info_height), (0, 0, 0), -1)
+            cv2.rectangle(annotated_frame, (10, 10), (350, info_height), (255, 255, 255), 2)
             cv2.putText(annotated_frame, f"IN: {counts['in']}",
                        (20, 45), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 255, 0), 2)
             cv2.putText(annotated_frame, f"OUT: {counts['out']}",
                        (20, 75), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 0, 255), 2)
             cv2.putText(annotated_frame, f"OCCUPANCY: {counts['occupancy']}",
                        (20, 105), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 255, 0), 2)
+
+            # Show identified and anonymous counts if face recognition is enabled
+            if face_recognition and face_recognition.is_enabled():
+                cv2.putText(annotated_frame, f"IDENTIFIED: {identified_count}",
+                           (20, 135), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (255, 0, 255), 2)
+                cv2.putText(annotated_frame, f"ANONYMOUS: {anonymous_count}",
+                           (20, 165), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (128, 128, 128), 2)
 
             # Display frame
             if app_config.get('display', {}).get('show_video', True):

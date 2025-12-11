@@ -193,7 +193,10 @@ class FaceRecognizer:
             # Detect all faces in frame
             faces = self.detect_faces(frame)
 
+            self.logger.info(f"[FR] Detected {len(faces)} faces in frame")
+
             if not faces:
+                self.logger.info(f"[FR] No faces detected, returning None for {len(tracks)} tracks")
                 return {int(track[4]): (None, 0.0) for track in tracks}
 
             # Match each track with detected faces
@@ -215,8 +218,10 @@ class FaceRecognizer:
                         best_iou = iou
                         best_face = face
 
-                # If face found with sufficient overlap
-                if best_face and best_iou > 0.3:
+                self.logger.info(f"[FR] Track {track_id}: best IoU = {best_iou:.3f}")
+
+                # If face found with sufficient overlap (lowered threshold from 0.3 to 0.2)
+                if best_face and best_iou > 0.2:
                     # Match against database
                     match_result = database.match_face(
                         best_face['embedding'],
@@ -226,12 +231,15 @@ class FaceRecognizer:
                     if match_result:
                         person_id, confidence = match_result
                         results[track_id] = (person_id, confidence)
-                        self.logger.debug(f"Track {track_id} matched to person {person_id} "
-                                        f"(confidence: {confidence:.3f})")
+                        person = database.get_person(person_id)
+                        self.logger.info(f"[FR] ✓ Track {track_id} matched to {person.name} "
+                                        f"(person_id: {person_id}, confidence: {confidence:.3f})")
                     else:
                         results[track_id] = (None, 0.0)
+                        self.logger.info(f"[FR] ✗ Track {track_id}: Face detected but no match (threshold={self.confidence_threshold})")
                 else:
                     results[track_id] = (None, 0.0)
+                    self.logger.info(f"[FR] ✗ Track {track_id}: IoU {best_iou:.3f} too low (< 0.2)")
 
             return results
 

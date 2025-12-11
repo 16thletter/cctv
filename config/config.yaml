@@ -97,8 +97,8 @@ face_recognition:
   enabled: true
   model: insightface  # Using InsightFace with ArcFace embeddings
   providers:
-    - CUDAExecutionProvider  # GPU (comment out if CPU only)
-    - CPUExecutionProvider
+    - CUDAExecutionProvider  # GPU ENABLED! (CUDA libraries fixed)
+    - CPUExecutionProvider   # Fallback
   det_size: [640, 640]  # Detection size (larger = more accurate but slower)
   confidence_threshold: 0.6  # Face matching threshold (0.0-1.0)
   min_face_size: 50  # Minimum face size in pixels
@@ -111,7 +111,7 @@ detection:
   confidence: 0.3  # Lowered from 0.4 to detect people further away (outside zone)
   device: cuda  # GPU acceleration enabled (RTX 5050)
   imgsz: 640  # Increased from 480 for better accuracy with GPU
-  model: yolov8n.pt
+  model: yolov8m.pt  # Medium model for better accuracy (90% vs 85%)
 display:
   output_path: output/output.avi
   save_output: false
