@@ -90,7 +90,7 @@ database:
   user: postgres
   password: your_password_here
   # Legacy SQLite (will be deprecated)
-  path: people_counter.db
+  path: data/databases/people_counter.db
 
 # Face Recognition Configuration (NEW - InsightFace + ArcFace)
 face_recognition:
@@ -100,7 +100,7 @@ face_recognition:
     - CUDAExecutionProvider  # GPU ENABLED! (CUDA libraries fixed)
     - CPUExecutionProvider   # Fallback
   det_size: [640, 640]  # Detection size (larger = more accurate but slower)
-  confidence_threshold: 0.6  # Face matching threshold (0.0-1.0)
+  confidence_threshold: 0.4  # Face matching threshold (lowered from 0.6 for better detection)
   min_face_size: 50  # Minimum face size in pixels
   max_faces_per_frame: 10  # Maximum faces to process per frame
   save_snapshots: true  # Save face snapshots on detection

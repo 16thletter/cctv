@@ -256,39 +256,45 @@ python3 view_attendance.py --organization-id 1
 ```
 cctv/
 ├── config/
-│   ├── config.yaml              # Application-wide settings
-│   └── config_dynamic.yaml      # Template for dynamic camera mode
+│   ├── config.yaml              # Production settings
+│   └── config_dynamic.yaml      # Development settings
 ├── database/
-│   └── schema.sql               # PostgreSQL database schema
+│   └── schema.sql               # PostgreSQL + pgvector schema
 ├── src/
-│   ├── detector.py              # YOLOv8 person detection
-│   ├── tracker.py               # ByteTrack tracking algorithm
-│   ├── counter.py               # Two-line zone counting system
-│   ├── database_pg.py           # PostgreSQL database manager
-│   ├── face_recognition.py      # InsightFace face recognition
+│   ├── detector.py              # YOLOv8 person detection (GPU)
+│   ├── strong_sort.py           # Strong SORT tracker (GPU)
+│   ├── counter.py               # Two-line zone counting
+│   ├── database_pg.py           # PostgreSQL + pgvector manager
+│   ├── face_recognition.py      # InsightFace (GPU-accelerated)
 │   ├── camera_manager.py        # Dynamic camera management
 │   └── utils.py                 # Utility functions
+├── scripts/
+│   ├── install.sh               # Install dependencies
+│   ├── run.sh                   # Run with GPU
+│   └── manage_persons.sh        # Person management
+├── cli/
+│   ├── camera_cli.py            # Camera management
+│   ├── person_cli.py            # Person management (GPU)
+│   └── diagnostic_cli.py        # System diagnostics
 ├── templates/
 │   └── dashboard.html           # Web dashboard UI
+├── docs/
+│   ├── README.md                # Main documentation
+│   ├── SETUP.md                 # Setup guide
+│   └── ARCHITECTURE.md          # Architecture guide
 ├── models/                      # YOLO models (auto-downloaded)
 ├── logs/                        # Application logs
-├── snapshots/                   # Face snapshots
+├── snapshots/                   # Face snapshots (GPU-generated)
 ├── output/                      # Output videos
-├── main.py                      # Single camera mode (legacy)
-├── run_cameras.py               # Multi-camera runner (recommended)
-├── camera_api.py                # REST API for camera management
-├── setup_database.py            # Database setup script
-├── enroll_face.py               # Employee enrollment
-├── manage_cameras.py            # Camera management CLI
-├── manage_organizations.py      # Organization management CLI
-├── view_attendance.py           # Attendance reports
-├── calibrate_two_lines.py       # Calibration tool
+├── run_cameras.py               # Multi-camera runner
+├── setup_database.py            # Database setup
+├── diagnose.py                  # System diagnostics
 ├── requirements.txt             # Core dependencies
-├── requirements_face.txt        # Face recognition dependencies
-├── .env.example                 # Environment variables template
-├── README.md                    # This file
-└── SETUP.md                     # Detailed setup guide
+├── requirements_face.txt        # Face recognition (GPU)
+└── .env.example                 # Environment template
 ```
+
+**Note**: See `docs/ARCHITECTURE.md` for recommended professional restructuring.
 
 ## ⚙️ Configuration Guide
 
