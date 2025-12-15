@@ -25,4 +25,4 @@ echo "=========================================="
 echo ""
 
 # Run the API server
-python3 "$SCRIPT_DIR/api_server.py"
+python3 "$PROJECT_ROOT/src/cctv/api/server.py"

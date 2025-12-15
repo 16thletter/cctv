@@ -446,6 +446,30 @@ class PostgreSQLDatabase:
             self.session.rollback()
             return False
 
+    def update_camera(self, camera_id: str, **kwargs) -> bool:
+        """Update camera details"""
+        if not self.session:
+            return False
+
+        try:
+            camera = self.get_camera(camera_id)
+            if not camera:
+                return False
+
+            for key, value in kwargs.items():
+                if hasattr(camera, key):
+                    setattr(camera, key, value)
+            
+            camera.updated_at = datetime.now()
+            self.session.commit()
+            self.logger.info(f"Updated camera: {camera_id}")
+            return True
+
+        except Exception as e:
+            self.logger.error(f"Error updating camera: {e}")
+            self.session.rollback()
+            return False
+
     # ========================================================================
     # ORGANIZATION MANAGEMENT
     # ========================================================================
@@ -503,6 +527,38 @@ class PostgreSQLDatabase:
             query = query.filter_by(is_active=True)
 
         return query.all()
+
+    def create_organization(self, *args, **kwargs) -> Optional[int]:
+        """Alias for add_organization"""
+        return self.add_organization(*args, **kwargs)
+
+    def update_organization(self, org_id: int, **kwargs) -> bool:
+        """Update organization details"""
+        if not self.session:
+            return False
+            
+        try:
+            org = self.get_organization(org_id)
+            if not org:
+                return False
+                
+            for key, value in kwargs.items():
+                if hasattr(org, key):
+                    setattr(org, key, value)
+            
+            org.updated_at = datetime.now()
+            self.session.commit()
+            self.logger.info(f"Updated organization: {org_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error updating organization: {e}")
+            self.session.rollback()
+            return False
+
+    def delete_organization(self, org_id: int) -> bool:
+        """Soft delete an organization"""
+        return self.update_organization(org_id, is_active=False)
 
     # ========================================================================
     # CAMERA MANAGEMENT
@@ -608,6 +664,52 @@ class PostgreSQLDatabase:
 
         return query.all()
 
+    def create_person(self, *args, **kwargs) -> Optional[int]:
+        """Alias for add_person"""
+        return self.add_person(*args, **kwargs)
+
+    def get_persons_by_organization(self, org_id: int, active_only: bool = True) -> List[Person]:
+        """Get all persons for an organization"""
+        if not self.session:
+            return []
+            
+        try:
+            query = self.session.query(Person).filter_by(organization_id=org_id)
+            if active_only:
+                query = query.filter_by(is_active=True)
+            return query.all()
+        except Exception as e:
+            self.logger.error(f"Error getting persons for organization: {e}")
+            return []
+
+    def update_person(self, person_id: int, **kwargs) -> bool:
+        """Update person details"""
+        if not self.session:
+            return False
+            
+        try:
+            person = self.get_person(person_id)
+            if not person:
+                return False
+                
+            for key, value in kwargs.items():
+                if hasattr(person, key):
+                    setattr(person, key, value)
+            
+            person.updated_at = datetime.now()
+            self.session.commit()
+            self.logger.info(f"Updated person: {person_id}")
+            return True
+            
+        except Exception as e:
+            self.logger.error(f"Error updating person: {e}")
+            self.session.rollback()
+            return False
+
+    def delete_person(self, person_id: int) -> bool:
+        """Soft delete a person"""
+        return self.update_person(person_id, is_active=False)
+
     # ========================================================================
     # FACE EMBEDDING MANAGEMENT
     # ========================================================================
@@ -643,6 +745,25 @@ class PostgreSQLDatabase:
 
         except Exception as e:
             self.logger.error(f"Error storing face embedding: {e}")
+            self.session.rollback()
+            return False
+
+    def add_face_embedding(self, person_id: int, embedding: np.ndarray, quality_score: float = None) -> bool:
+        """Add a face embedding (alias for store_face_embedding)"""
+        return self.store_face_embedding(person_id, embedding, quality_score)
+
+    def delete_face_embeddings(self, person_id: int) -> bool:
+        """Delete all face embeddings for a person"""
+        if not self.session:
+            return False
+            
+        try:
+            self.session.query(FaceEmbedding).filter_by(person_id=person_id).delete()
+            self.session.commit()
+            self.logger.info(f"Deleted face embeddings for person {person_id}")
+            return True
+        except Exception as e:
+            self.logger.error(f"Error deleting face embeddings: {e}")
             self.session.rollback()
             return False
 
@@ -1030,6 +1151,33 @@ class PostgreSQLDatabase:
     # ========================================================================
     # STATISTICS AND QUERIES
     # ========================================================================
+
+    def get_recent_events(self, limit: int = 100, camera_id: str = None) -> List:
+        """Get recent entry/exit events"""
+        if not self.session:
+            return []
+            
+        try:
+            query = self.session.query(EntryExitLog)
+            
+            if camera_id:
+                # Resolve camera_id string to DB ID
+                # If camera_id is numeric, it might be the DB ID, but API param says 'camera_id' which is string usually
+                if isinstance(camera_id, str) and not camera_id.isdigit():
+                    cam_db_id = self.get_camera_id(camera_id)
+                    if cam_db_id:
+                        query = query.filter_by(camera_id=cam_db_id)
+                    else:
+                        # Camera likely not found by string ID, if it's digit treat as ID? 
+                        # Or return empty? Let's assume input is correct.
+                        return []
+                else:
+                    query = query.filter_by(camera_id=int(camera_id))
+            
+            return query.order_by(EntryExitLog.timestamp.desc()).limit(limit).all()
+        except Exception as e:
+            self.logger.error(f"Error getting recent events: {e}")
+            return []
 
     def get_entry_exit_stats(self, camera_id: int = None,
                             start_time: datetime = None,

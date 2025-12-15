@@ -11,7 +11,6 @@ from dotenv import load_dotenv
 
 import sys
 import os
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../src')))
 
 from cctv.utils.utils import load_config
 from cctv.database.database_pg import PostgreSQLDatabase
