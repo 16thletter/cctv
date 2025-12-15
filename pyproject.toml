@@ -1,0 +1,35 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cctv"
+version = "0.1.0"
+description = "CCTV People Counter with Face Recognition"
+readme = "README.md"
+requires-python = ">=3.8"
+license = {text = "MIT"}
+authors = [
+    {name = "Your Name", email = "your.email@example.com"}
+]
+dependencies = [
+    "numpy",
+    "opencv-python",
+    "psycopg2-binary",
+    "pgvector",
+    "pyyaml",
+    "python-dotenv",
+    "ultralytics",
+    "insightface",
+    "onnxruntime-gpu",
+    "scipy",
+    "lap",
+    "cython",
+    "filterpy"
+]
+
+[project.scripts]
+cctv-counter = "cctv.main:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

@@ -1,8 +1,64 @@
+# Camera Configuration
+# ============================================================================
+# CAMERA CONFIGURATION
+# ============================================================================
+# IMPORTANT: Camera RTSP URLs should be stored in .env file for security
+# Example .env file:
+#   CAMERA_MAIN_URL=rtsp://admin:password@192.168.1.100:554/stream1
+#   CAMERA_ENTRANCE_URL=rtsp://admin:password@192.168.1.101:554/stream1
+#   CAMERA_EXIT_URL=rtsp://admin:password@192.168.1.102:554/stream1
+
+# For single camera mode, use 'camera' section
 camera:
-  source: rtsp://admin:BEST@@INFO@60.254.111.210:555/stream1
+  id: main  # Camera identifier for multi-camera setup
+  source_env: CAMERA_MAIN_URL  # Environment variable name containing RTSP URL
+  organization_id: null  # Optional: Organization ID this camera belongs to
+  location: Main Entrance  # Human-readable location
   width: 1280
   height: 720
   fps: 30
+
+# Multi-Camera Configuration (Optional - for multiple cameras)
+# Each camera can belong to a different organization
+# cameras:
+#   entrance:
+#     id: entrance
+#     source_env: CAMERA_ENTRANCE_URL  # Environment variable for RTSP URL
+#     organization_id: 1  # Organization ID (e.g., Company A)
+#     location: Main Entrance
+#     counting_line:
+#       outside_line: [0.35, 0.52, 0.65, 0.52]
+#       inside_line: [0.35, 0.58, 0.65, 0.58]
+#       in_direction: down
+#
+#   exit:
+#     id: exit
+#     source_env: CAMERA_EXIT_URL  # Environment variable for RTSP URL
+#     organization_id: 1  # Organization ID (e.g., Company A)
+#     location: Main Exit
+#     counting_line:
+#       outside_line: [0.35, 0.50, 0.65, 0.50]
+#       inside_line: [0.35, 0.56, 0.65, 0.56]
+#       in_direction: up
+#
+#   lobby_companyB:
+#     id: lobby_companyB
+#     source_env: CAMERA_LOBBY_B_URL  # Environment variable for RTSP URL
+#     organization_id: 2  # Organization ID (e.g., Company B)
+#     location: Company B Lobby
+#     counting_line:
+#       outside_line: [0.30, 0.50, 0.70, 0.50]
+#       inside_line: [0.30, 0.56, 0.70, 0.56]
+#       in_direction: down
+#
+#   lobby:
+#     id: lobby
+#     source: rtsp://admin:password@192.168.1.103/stream1
+#     location: Lobby Area
+#     counting_line:
+#       outside_line: [0.30, 0.55, 0.70, 0.55]
+#       inside_line: [0.30, 0.61, 0.70, 0.61]
+#       in_direction: down
 counting_line:
   outside_line:
   - 0.35  # Left edge of door (35% from left)
@@ -22,17 +78,40 @@ counting_line:
   in_direction: down
   min_track_length: 5
   thickness: 3
+# PostgreSQL Database Configuration (NEW - Face Recognition)
 database:
   enabled: true
   log_events: true
-  path: people_counter.db
+  # PostgreSQL settings
+  type: postgresql  # 'postgresql' or 'sqlite' (legacy)
+  host: localhost
+  port: 5432
+  database: face_recognition
+  user: postgres
+  password: your_password_here
+  # Legacy SQLite (will be deprecated)
+  path: data/databases/people_counter.db
+
+# Face Recognition Configuration (NEW - InsightFace + ArcFace)
+face_recognition:
+  enabled: true
+  model: insightface  # Using InsightFace with ArcFace embeddings
+  providers:
+    - CUDAExecutionProvider  # GPU ENABLED! (CUDA libraries fixed)
+    - CPUExecutionProvider   # Fallback
+  det_size: [640, 640]  # Detection size (larger = more accurate but slower)
+  confidence_threshold: 0.4  # Face matching threshold (lowered from 0.6 for better detection)
+  min_face_size: 50  # Minimum face size in pixels
+  max_faces_per_frame: 10  # Maximum faces to process per frame
+  save_snapshots: true  # Save face snapshots on detection
+  snapshot_dir: snapshots/faces
 detection:
   classes:
   - 0
   confidence: 0.3  # Lowered from 0.4 to detect people further away (outside zone)
-  device: cpu
-  imgsz: 480
-  model: yolov8n.pt
+  device: cuda  # GPU acceleration enabled (RTX 5050)
+  imgsz: 640  # Increased from 480 for better accuracy with GPU
+  model: yolov8m.pt  # Medium model for better accuracy (90% vs 85%)
 display:
   output_path: output/output.avi
   save_output: false
@@ -40,7 +119,7 @@ display:
   show_detections: true
   show_tracks: true
   show_trails: true
-  show_video: true
+  show_video: true  # Display video window with annotations
   trail_length: 30
 logging:
   console: true
@@ -63,3 +142,7 @@ tracking:
   track_low_thresh: 0.05  # Lowered from 0.1 for better recovery
   new_track_thresh: 0.4  # Lowered from 0.5 to create tracks more easily
   track_buffer: 45  # Increased from 30 to recover lost tracks longer
+  # Strong SORT appearance-based tracking (GPU-accelerated ReID)
+  lambda_iou: 0.98  # Weight for IoU-based matching
+  lambda_app: 0.02  # Weight for appearance-based matching
+  appearance_thresh: 0.25  # Appearance distance threshold
