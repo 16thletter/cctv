@@ -117,7 +117,7 @@ camera_model = api.model('Camera', {
     'organization_id': fields.Integer(description='Organization ID'),
     'location': fields.String(description='Camera location'),
     'description': fields.String(description='Camera description'),
-    'rtsp_url_env': fields.String(description='Environment variable name for RTSP URL'),
+    'rtsp_url': fields.String(description='RTSP URL directly stored in database'),
     'is_active': fields.Boolean(description='Active status'),
     'created_at': fields.DateTime(description='Creation timestamp')
 })
@@ -127,7 +127,7 @@ camera_input = api.model('CameraInput', {
     'organization_id': fields.Integer(description='Organization ID'),
     'location': fields.String(description='Camera location'),
     'description': fields.String(description='Camera description'),
-    'rtsp_url_env': fields.String(required=True, description='Environment variable name for RTSP URL')
+    'rtsp_url': fields.String(required=True, description='RTSP URL directly (e.g., rtsp://user:pass@ip:port/stream)')
 })
 
 # Attendance models
@@ -700,7 +700,7 @@ class CameraList(Resource):
             'organization_id': cam.organization_id,
             'location': cam.location,
             'description': cam.description,
-            'rtsp_url_env': cam.rtsp_url_env,
+            'rtsp_url': cam.rtsp_url,
             'is_active': cam.is_active,
             'created_at': cam.created_at
         } for cam in cameras]
@@ -712,14 +712,9 @@ class CameraList(Resource):
         """Create a new camera"""
         data = request.json
         
-        # Verify environment variable exists
-        rtsp_url = os.getenv(data['rtsp_url_env'])
-        if not rtsp_url:
-            api.abort(400, f"Environment variable '{data['rtsp_url_env']}' not found in .env file")
-        
         camera_id = db.add_camera(
             camera_id=data['camera_id'],
-            rtsp_url_env=data['rtsp_url_env'],
+            rtsp_url=data['rtsp_url'],
             location=data.get('location'),
             organization_id=data.get('organization_id'),
             description=data.get('description')
@@ -732,7 +727,7 @@ class CameraList(Resource):
                 'camera_id': camera.camera_id,
                 'organization_id': camera.organization_id,
                 'location': camera.location,
-                'rtsp_url_env': camera.rtsp_url_env,
+                'rtsp_url': camera.rtsp_url,
                 'is_active': camera.is_active,
                 'created_at': camera.created_at
             }, 201
@@ -755,7 +750,7 @@ class Camera(Resource):
             'organization_id': camera.organization_id,
             'location': camera.location,
             'description': camera.description,
-            'rtsp_url_env': camera.rtsp_url_env,
+            'rtsp_url': camera.rtsp_url,
             'is_active': camera.is_active,
             'created_at': camera.created_at
         }
@@ -780,7 +775,7 @@ class Camera(Resource):
                 'organization_id': camera.organization_id,
                 'location': camera.location,
                 'description': camera.description,
-                'rtsp_url_env': camera.rtsp_url_env,
+                'rtsp_url': camera.rtsp_url,
                 'is_active': camera.is_active,
                 'created_at': camera.created_at
             }
@@ -858,19 +853,18 @@ class CameraTest(Resource):
         if not camera:
             api.abort(404, f"Camera {camera_id} not found")
         
-        # Get RTSP URL from environment
-        rtsp_url = os.getenv(camera.rtsp_url_env)
-        if not rtsp_url:
+        # Get RTSP URL directly from database
+        if not camera.rtsp_url:
             return {
                 'success': False,
                 'camera_id': camera_id,
                 'accessible': False,
-                'error': f"Environment variable '{camera.rtsp_url_env}' not found"
+                'error': 'RTSP URL not set for this camera'
             }, 400
         
         # Try to open camera
         try:
-            cap = cv2.VideoCapture(rtsp_url)
+            cap = cv2.VideoCapture(camera.rtsp_url)
             is_accessible = cap.isOpened()
             cap.release()
             
@@ -878,7 +872,7 @@ class CameraTest(Resource):
                 'success': True,
                 'camera_id': camera_id,
                 'accessible': is_accessible,
-                'rtsp_url_env': camera.rtsp_url_env
+                'rtsp_url': camera.rtsp_url
             }
         except Exception as e:
             logger.error(f"Error testing camera: {e}")

@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS cameras (
     organization_id INTEGER REFERENCES organizations(id) ON DELETE SET NULL,
     location VARCHAR(255),
     description TEXT,
-    rtsp_url_env VARCHAR(100),  -- Environment variable name for RTSP URL (e.g., 'CAMERA_MAIN_URL')
+    rtsp_url VARCHAR(500),  -- RTSP URL directly stored in database (e.g., 'rtsp://user:pass@ip:port/stream')
     is_active BOOLEAN DEFAULT true,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP

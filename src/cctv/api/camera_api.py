@@ -52,7 +52,7 @@ def get_cameras():
                 'organization_id': cam.organization_id,
                 'location': cam.location,
                 'description': cam.description,
-                'rtsp_url_env': cam.rtsp_url_env,
+                'rtsp_url': cam.rtsp_url,
                 'is_active': cam.is_active,
                 'created_at': cam.created_at.isoformat() if cam.created_at else None
             }
@@ -66,7 +66,7 @@ def add_camera():
     """Add a new camera"""
     data = request.json
     
-    required_fields = ['camera_id', 'rtsp_url_env']
+    required_fields = ['camera_id', 'rtsp_url']
     for field in required_fields:
         if field not in data:
             return jsonify({
@@ -74,17 +74,9 @@ def add_camera():
                 'error': f'Missing required field: {field}'
             }), 400
     
-    # Verify environment variable exists
-    rtsp_url = os.getenv(data['rtsp_url_env'])
-    if not rtsp_url:
-        return jsonify({
-            'success': False,
-            'error': f"Environment variable '{data['rtsp_url_env']}' not found"
-        }), 400
-    
     camera_id = db.add_camera(
         camera_id=data['camera_id'],
-        rtsp_url_env=data['rtsp_url_env'],
+        rtsp_url=data['rtsp_url'],
         location=data.get('location'),
         organization_id=data.get('organization_id'),
         description=data.get('description')
@@ -122,7 +114,7 @@ def get_camera(camera_id):
             'organization_id': camera.organization_id,
             'location': camera.location,
             'description': camera.description,
-            'rtsp_url_env': camera.rtsp_url_env,
+            'rtsp_url': camera.rtsp_url,
             'is_active': camera.is_active,
             'created_at': camera.created_at.isoformat() if camera.created_at else None
         }
@@ -171,16 +163,15 @@ def test_camera(camera_id):
             'error': 'Camera not found'
         }), 404
     
-    # Get RTSP URL from environment
-    rtsp_url = os.getenv(camera.rtsp_url_env)
-    if not rtsp_url:
+    # Get RTSP URL directly from database
+    if not camera.rtsp_url:
         return jsonify({
             'success': False,
-            'error': f"Environment variable '{camera.rtsp_url_env}' not found"
+            'error': 'RTSP URL not set for this camera'
         }), 400
     
     # Try to open camera
-    cap = cv2.VideoCapture(rtsp_url)
+    cap = cv2.VideoCapture(camera.rtsp_url)
     is_accessible = cap.isOpened()
     cap.release()
     
@@ -188,7 +179,7 @@ def test_camera(camera_id):
         'success': True,
         'camera_id': camera_id,
         'accessible': is_accessible,
-        'rtsp_url_env': camera.rtsp_url_env
+        'rtsp_url': camera.rtsp_url
     })
 
 

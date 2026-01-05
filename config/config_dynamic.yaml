@@ -5,7 +5,7 @@
 # Individual camera configurations are stored in the DATABASE.
 # 
 # To add cameras:
-#   python3 manage_cameras.py add --camera-id <id> --rtsp-url-env <env_var>
+#   python3 manage_cameras.py add --camera-id <id> --rtsp-url "rtsp://user:pass@ip:port/stream"
 #
 # To run cameras:
 #   python3 run_cameras.py

@@ -53,19 +53,16 @@ class CameraManager:
         # Convert to configuration dictionaries
         camera_configs = []
         for cam in cameras:
-            # Get RTSP URL from environment variable
-            rtsp_url = None
-            if cam.rtsp_url_env:
-                rtsp_url = os.getenv(cam.rtsp_url_env)
-                if not rtsp_url:
-                    self.logger.warning(
-                        f"Environment variable '{cam.rtsp_url_env}' not found for camera '{cam.camera_id}'"
-                    )
-                    continue
+            # Get RTSP URL directly from database
+            if not cam.rtsp_url:
+                self.logger.warning(
+                    f"RTSP URL not set for camera '{cam.camera_id}'"
+                )
+                continue
 
             camera_config = {
                 'id': cam.camera_id,
-                'source': rtsp_url,
+                'source': cam.rtsp_url,
                 'organization_id': cam.organization_id,
                 'location': cam.location,
                 'description': cam.description,

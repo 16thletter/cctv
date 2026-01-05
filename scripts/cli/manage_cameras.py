@@ -38,7 +38,7 @@ def parse_line_coords(line_str):
         return None
 
 
-def add_camera(db, camera_id, rtsp_url_env, location=None, organization_id=None,
+def add_camera(db, camera_id, rtsp_url, location=None, organization_id=None,
                description=None, outside_line=None, inside_line=None, in_direction=None):
     """Add a new camera"""
     logger.info("=" * 60)
@@ -47,7 +47,7 @@ def add_camera(db, camera_id, rtsp_url_env, location=None, organization_id=None,
 
     cam_id = db.add_camera(
         camera_id=camera_id,
-        rtsp_url_env=rtsp_url_env,
+        rtsp_url=rtsp_url,
         location=location,
         organization_id=organization_id,
         description=description,
@@ -59,7 +59,7 @@ def add_camera(db, camera_id, rtsp_url_env, location=None, organization_id=None,
     if cam_id:
         logger.info("✓ Camera added successfully!")
         logger.info(f"Camera ID: {camera_id}")
-        logger.info(f"RTSP URL Environment Variable: {rtsp_url_env}")
+        logger.info(f"RTSP URL: {rtsp_url}")
         if location:
             logger.info(f"Location: {location}")
         if organization_id:
@@ -142,11 +142,11 @@ def list_cameras(db, organization_id=None, active_only=True):
             cam.camera_id,
             org_name,
             cam.location or '-',
-            cam.rtsp_url_env or '-',
+            cam.rtsp_url or '-',
             '✓' if cam.is_active else '✗'
         ])
     
-    headers = ['ID', 'Camera ID', 'Organization', 'Location', 'RTSP URL Env', 'Active']
+    headers = ['ID', 'Camera ID', 'Organization', 'Location', 'RTSP URL', 'Active']
     print(tabulate(table_data, headers=headers, tablefmt='grid'))
     print(f"\nTotal: {len(cameras)} camera(s)")
     
@@ -162,8 +162,8 @@ def main():
     # Add camera
     add_parser = subparsers.add_parser('add', help='Add a new camera')
     add_parser.add_argument('--camera-id', required=True, help='Camera identifier (e.g., entrance, exit)')
-    add_parser.add_argument('--rtsp-url-env', required=True,
-                           help='Environment variable name for RTSP URL (e.g., CAMERA_ENTRANCE_URL)')
+    add_parser.add_argument('--rtsp-url', required=True,
+                           help='RTSP URL directly (e.g., rtsp://user:pass@ip:port/stream)')
     add_parser.add_argument('--location', help='Camera location')
     add_parser.add_argument('--organization-id', type=int, help='Organization ID')
     add_parser.add_argument('--description', help='Camera description')
@@ -209,7 +209,7 @@ def main():
         in_direction = args.in_direction if hasattr(args, 'in_direction') else None
 
         success = add_camera(
-            db, args.camera_id, args.rtsp_url_env, args.location,
+            db, args.camera_id, args.rtsp_url, args.location,
             args.organization_id, args.description,
             outside_line, inside_line, in_direction
         )

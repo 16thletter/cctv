@@ -254,12 +254,12 @@ class CameraPipeline:
         Returns:
             List of counting events
         """
-        # This would integrate with the PersonCounter class
+        # This would integrate with the PeopleCounter class from core.counter
         # For now, return empty list
         # In full implementation, this would check zone crossings
         events = []
         
-        # TODO: Integrate PersonCounter logic here
+        # TODO: Integrate PeopleCounter logic here (from cctv.core.counter)
         
         return events
     

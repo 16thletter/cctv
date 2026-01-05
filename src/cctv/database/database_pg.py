@@ -47,7 +47,7 @@ class Camera(Base):
     organization_id = Column(Integer, ForeignKey('organizations.id', ondelete='SET NULL'))
     location = Column(String(255))
     description = Column(Text)
-    rtsp_url_env = Column(String(100))  # Environment variable name for RTSP URL
+    rtsp_url = Column(String(500))  # RTSP URL directly stored in database
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.now)
     updated_at = Column(DateTime, default=datetime.now, onupdate=datetime.now)
@@ -257,7 +257,7 @@ class PostgreSQLDatabase:
     # CAMERA MANAGEMENT
     # ========================================================================
 
-    def add_camera(self, camera_id: str, rtsp_url_env: str, location: str = None,
+    def add_camera(self, camera_id: str, rtsp_url: str, location: str = None,
                    organization_id: int = None, description: str = None,
                    outside_line: list = None, inside_line: list = None,
                    in_direction: str = None, line_color: list = None,
@@ -268,7 +268,7 @@ class PostgreSQLDatabase:
 
         Args:
             camera_id: Unique camera identifier
-            rtsp_url_env: Environment variable name for RTSP URL
+            rtsp_url: RTSP URL directly (e.g., 'rtsp://user:pass@ip:port/stream')
             location: Camera location description
             organization_id: Organization ID this camera belongs to
             description: Camera description
@@ -292,7 +292,7 @@ class PostgreSQLDatabase:
                 organization_id=organization_id,
                 location=location,
                 description=description,
-                rtsp_url_env=rtsp_url_env,
+                rtsp_url=rtsp_url,
                 is_active=True
             )
 

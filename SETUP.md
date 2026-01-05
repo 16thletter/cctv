@@ -316,7 +316,7 @@ python3 manage_organizations.py add --name "Company C" --description "Remote Off
 # Add camera to database
 python3 manage_cameras.py add \
   --camera-id entrance \
-  --rtsp-url-env CAMERA_ENTRANCE_URL \
+  --rtsp-url "rtsp://admin:password@192.168.1.101:554/stream1" \
   --location "Main Entrance" \
   --organization-id 1 \
   --description "Front door entrance camera"
@@ -333,14 +333,14 @@ python3 manage_cameras.py list --organization-id 1
 # Add exit camera
 python3 manage_cameras.py add \
   --camera-id exit \
-  --rtsp-url-env CAMERA_EXIT_URL \
+  --rtsp-url "rtsp://admin:password@192.168.1.102:554/stream1" \
   --location "Main Exit" \
   --organization-id 1
 
 # Add lobby camera
 python3 manage_cameras.py add \
   --camera-id lobby \
-  --rtsp-url-env CAMERA_LOBBY_URL \
+  --rtsp-url "rtsp://admin:password@192.168.1.103:554/stream1" \
   --location "Lobby Area" \
   --organization-id 1
 ```

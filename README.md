@@ -206,7 +206,7 @@ export WEBHOOK_BASE_URL=http://your-rails-api.com
 # Add camera via CLI
 python scripts/cli/manage_cameras.py add \
   --camera-id entrance \
-  --rtsp-url-env CAMERA_ENTRANCE_URL \
+  --rtsp-url "rtsp://admin:password@192.168.1.101:554/stream1" \
   --location "Main Entrance" \
   --organization-id 1
 ```
@@ -253,9 +253,8 @@ export POSTGRES_PASSWORD=your_password
 # Webhooks
 export WEBHOOK_BASE_URL=http://your-rails-api.com
 
-# Camera RTSP URLs (stored in .env file)
-CAMERA_ENTRANCE_URL=rtsp://admin:password@192.168.1.101:554/stream1
-CAMERA_EXIT_URL=rtsp://admin:password@192.168.1.102:554/stream1
+# Note: RTSP URLs are now stored directly in the database
+# No need for environment variables - add cameras via CLI or API
 ```
 
 ### Detector Configuration
