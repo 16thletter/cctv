@@ -1,13 +1,26 @@
 """
 Person Detection Module using YOLOv8
+BACKWARD COMPATIBILITY LAYER
+
+This module maintains backward compatibility with existing code.
+It wraps the new PersonDetector from detectors.person_detector
+while maintaining the old interface.
 """
 import logging
-from ultralytics import YOLO
 import numpy as np
+
+# Import new PersonDetector
+from cctv.detectors.person_detector import PersonDetector as NewPersonDetector
 
 
 class PersonDetector:
-    """Person detector using YOLOv8"""
+    """
+    Person detector using YOLOv8
+    BACKWARD COMPATIBILITY WRAPPER
+    
+    This class wraps the new PersonDetector to maintain compatibility
+    with existing code that expects the old interface.
+    """
     
     def __init__(self, config):
         """
@@ -17,31 +30,19 @@ class PersonDetector:
             config: Configuration dictionary
         """
         self.logger = logging.getLogger(__name__)
-        self.config = config['detection']
+        self.config = config
         
-        # Load YOLO model
-        model_path = f"models/{self.config['model']}"
-        self.logger.info(f"Loading YOLO model from {model_path}")
+        # Initialize new detector
+        self._detector = NewPersonDetector(config, self.logger)
+        if not self._detector.initialize():
+            raise RuntimeError("Failed to initialize PersonDetector")
         
-        try:
-            self.model = YOLO(model_path)
-            self.logger.info("YOLO model loaded successfully")
-        except Exception as e:
-            self.logger.warning(f"Could not load local model: {e}")
-            self.logger.info("Downloading YOLOv8 model...")
-            self.model = YOLO(self.config['model'])
-            self.logger.info("Model downloaded and loaded successfully")
-        
-        # Set device
-        self.device = self.config['device']
-        self.model.to(self.device)
-        
-        # Detection parameters
-        self.confidence = self.config['confidence']
-        self.classes = self.config['classes']  # [0] for person class
-        self.imgsz = self.config.get('imgsz', 640)  # Image size for inference
-
-        self.logger.info(f"Detector initialized - Device: {self.device}, Confidence: {self.confidence}, ImgSize: {self.imgsz}")
+        # Expose model for backward compatibility
+        self.model = self._detector.model
+        self.device = self._detector.device
+        self.confidence = self._detector.confidence
+        self.classes = self._detector.classes
+        self.imgsz = self._detector.imgsz
     
     def detect(self, frame):
         """
@@ -52,40 +53,24 @@ class PersonDetector:
             
         Returns:
             detections: List of detections [x1, y1, x2, y2, confidence, class_id]
+                      (old format for backward compatibility)
         """
-        # Run inference
-        results = self.model(
-            frame,
-            conf=self.confidence,
-            classes=self.classes,
-            imgsz=self.imgsz,
-            verbose=False
-        )
+        # Use new detector
+        result = self._detector.detect(frame)
         
+        # Convert to old format
         detections = []
+        for det in result.detections:
+            bbox = det['bbox']
+            detections.append([
+                bbox[0], bbox[1],  # x1, y1
+                bbox[2], bbox[3],  # x2, y2
+                det['confidence'],  # confidence
+                det.get('class_id', 0)  # class_id
+            ])
         
-        # Extract detections
-        if len(results) > 0:
-            result = results[0]
-            if result.boxes is not None and len(result.boxes) > 0:
-                boxes = result.boxes.xyxy.cpu().numpy()  # x1, y1, x2, y2
-                confidences = result.boxes.conf.cpu().numpy()
-                class_ids = result.boxes.cls.cpu().numpy()
-                
-                for box, conf, cls_id in zip(boxes, confidences, class_ids):
-                    detections.append([
-                        int(box[0]), int(box[1]),  # x1, y1
-                        int(box[2]), int(box[3]),  # x2, y2
-                        float(conf),                # confidence
-                        int(cls_id)                 # class_id
-                    ])
-
-        # Log detection count periodically
-        if len(detections) > 0:
-            self.logger.debug(f"Detected {len(detections)} person(s)")
-
         return detections
-
+    
     def get_centroids(self, detections):
         """
         Calculate centroids of bounding boxes

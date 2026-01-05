@@ -1,0 +1,144 @@
+# CCTV Analytics System - Configuration Example
+# Copy this file to config.yaml and customize for your environment
+
+# ============================================================================
+# DATABASE CONFIGURATION
+# ============================================================================
+database:
+  enabled: true
+  type: postgresql
+  host: localhost  # Override with POSTGRES_HOST env var
+  port: 5432       # Override with POSTGRES_PORT env var
+  database: face_recognition  # Override with POSTGRES_DB env var
+  user: postgres   # Override with POSTGRES_USER env var
+  password: your_password  # Override with POSTGRES_PASSWORD env var
+
+# ============================================================================
+# DETECTORS CONFIGURATION
+# ============================================================================
+detectors:
+  # List of enabled detectors (person, fire, mask, queue, etc.)
+  enabled:
+    - person
+    # - fire
+    # - mask
+    # - queue
+
+# ============================================================================
+# PERSON DETECTION CONFIGURATION
+# ============================================================================
+detection:
+  model: yolov8n.pt  # yolov8n (fast), yolov8s/m/l/x (more accurate)
+  confidence: 0.3
+  device: cuda  # 'cuda' for GPU, 'cpu' for CPU
+  classes: [0]  # COCO class 0 = person
+  imgsz: 640
+
+# ============================================================================
+# FIRE DETECTION CONFIGURATION
+# ============================================================================
+fire_detection:
+  model: yolov8n.pt  # Would be custom trained fire model
+  confidence: 0.5
+  device: cuda
+  imgsz: 640
+
+# ============================================================================
+# TRACKING CONFIGURATION
+# ============================================================================
+tracking:
+  track_high_thresh: 0.4
+  max_age: 90
+  iou_threshold: 0.3
+  min_hits: 1
+  track_low_thresh: 0.05
+  new_track_thresh: 0.4
+  track_buffer: 45
+  lambda_iou: 0.98
+  lambda_app: 0.02
+  appearance_thresh: 0.25
+
+# ============================================================================
+# COUNTING LINE CONFIGURATION
+# ============================================================================
+counting_line:
+  outside_line: [0.35, 0.52, 0.65, 0.52]  # [x1, y1, x2, y2] as percentages
+  inside_line: [0.35, 0.58, 0.65, 0.58]
+  in_direction: down  # up, down, left, right
+  cooldown_frames: 75
+
+# ============================================================================
+# WEBHOOK CONFIGURATION (Rails API Integration)
+# ============================================================================
+webhooks:
+  enabled: true
+  base_url: http://localhost:3000  # Override with WEBHOOK_BASE_URL env var
+  timeout: 5  # Request timeout in seconds
+  retry_attempts: 3  # Number of retry attempts
+  retry_delay: 1.0  # Delay between retries (seconds)
+  
+  # Event endpoint mapping
+  # Maps event types to Rails API endpoints
+  endpoints:
+    person_in: /api/v1/events/person_in
+    person_out: /api/v1/events/person_out
+    fire_detected: /api/v1/events/fire_detected
+    mask_detected: /api/v1/events/mask_detected
+    queue_detected: /api/v1/events/queue_detected
+    # Add more event types as needed
+
+# ============================================================================
+# FACE RECOGNITION CONFIGURATION
+# ============================================================================
+face_recognition:
+  enabled: true
+  model: buffalo_l  # buffalo_l (accurate), buffalo_s (fast)
+  providers:
+    - CUDAExecutionProvider  # GPU
+    - CPUExecutionProvider  # Fallback
+  det_size: [640, 640]
+  confidence_threshold: 0.4
+  min_face_size: 50
+  max_faces_per_frame: 10
+  save_snapshots: true
+  snapshot_dir: snapshots/faces
+
+# ============================================================================
+# API SERVER CONFIGURATION
+# ============================================================================
+api:
+  host: 0.0.0.0
+  port: 5000
+  debug: false
+
+# ============================================================================
+# PROCESSING CONFIGURATION
+# ============================================================================
+processing:
+  num_threads: 4
+  skip_frames: 2  # Process every Nth frame
+  roi_enabled: false
+  roi_coordinates: [0, 0, 1, 1]
+
+# ============================================================================
+# DISPLAY CONFIGURATION
+# ============================================================================
+display:
+  show_video: true
+  show_detections: true
+  show_tracks: true
+  show_trails: true
+  show_counts: true
+  save_output: false
+  output_path: output/output.avi
+  trail_length: 30
+
+# ============================================================================
+# LOGGING CONFIGURATION
+# ============================================================================
+logging:
+  level: INFO  # DEBUG, INFO, WARNING, ERROR
+  console: true
+  file: logs/app.log
+
+

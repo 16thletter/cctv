@@ -1,746 +1,564 @@
-# 🎥 CCTV People Counter with Face Recognition
+# 🎥 CCTV Analytics System
 
-An intelligent people counting and attendance tracking system using computer vision to track people entering/exiting through doors with face recognition capabilities.
+A production-ready, scalable computer vision system for real-time analytics and event detection. Built with clean architecture principles, supporting multiple detection models (person counting, fire detection, mask detection, queue detection) with easy extensibility.
 
-## 🌟 Features
+## 📋 Table of Contents
 
-### **Core Features**
-- **Real-time Person Detection** using YOLOv8
-- **Advanced Multi-Object Tracking** with ByteTrack
-- **Bi-directional Counting** (IN/OUT) with two-line zone system
-- **Face Recognition** using InsightFace + ArcFace embeddings
-- **Employee Attendance Tracking** with automatic IN/OUT counting
-- **Multi-Organization Support** with organization-specific cameras
-- **PostgreSQL Database** with pgvector for face embeddings
-- **Dynamic Camera Management** - add cameras without config editing
-- **REST API** for camera and organization man
-- ✅ Add cameras via CLI: `manage_cameras.py add`
-- ✅ Add cameras via API: `POST /api/cameras`
-- ✅ No need to touch `config.yaml`
+- [Overview](#overview)
+- [Architecture](#architecture)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Configuration](#configuration)
+- [Adding New Detectors](#adding-new-detectors)
+- [Webhook Integration](#webhook-integration)
+- [Production Deployment](#production-deployment)
+- [API Reference](#api-reference)
 
-### **2. Truly Dynamic**
-- ✅ Cameras loaded from database at runtime
-- ✅ Add/remove cameras without code changes
-- ✅ Filter by organization dynamically
+## 🎯 Overview
 
-### **3. Secure**
-- ✅ RTSP URLs in `.env` file (not in database)
-- ✅ Environment variable names in database
-- ✅ No passwords in version control
+This system processes video streams from multiple cameras, runs various AI detection models in parallel, and sends real-time events to your Rails backend via webhooks. It's designed to be:
 
-### **4. Scalable**
-- ✅ Handle 1 or 100 cameras easilyagement
-- **Web Dashboard** for real-time visualization
+- **Modular**: Easy to add new detection types
+- **Scalable**: Handles multiple cameras efficiently
+- **Production-Ready**: Proper logging, error handling, and configuration management
+- **Extensible**: Plugin-based detector architecture
 
-### **Advanced Capabilities**
-- **Cross-Camera Tracking** - recognize same person across multiple cameras
-- **Spatial Separation Logic** - handle multiple people crossing simultaneously
-- **Organization-Level Analytics** - attendance stats per organization
-- **Secure Credential Management** - RTSP URLs in .env file
-- **Multi-Camera Architecture** - unlimited cameras, each in separate process
+## 🏗️ Architecture
 
-## 🏗️ System Architecture
+### System Architecture Diagram
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Camera Sources (.env)                        │
-│  CAMERA_1_URL, CAMERA_2_URL, CAMERA_3_URL...                   │
-└────────────────────────┬────────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────────┐
-│              PostgreSQL Database (Centralized)                  │
-│  • Organizations  • Persons  • Face Embeddings                  │
-│  • Cameras  • Attendance  • Entry/Exit Events                   │
-└────────────────────────┬────────────────────────────────────────┘
-                         │
-                         ▼
-              ┌──────────────────────┐
-              │   Camera Manager     │
-              │  (Dynamic Loading)   │
-              └──────────┬───────────┘
-                         │
-         ┌───────────────┼───────────────┐
-         │               │               │
-         ▼               ▼               ▼
-┌─────────────┐  ┌─────────────┐  ┌─────────────┐
-│  Camera 1   │  │  Camera 2   │  │  Camera N   │
-│  Process    │  │  Process    │  │  Process    │
-├─────────────┤  ├─────────────┤  ├─────────────┤
-│ YOLOv8      │  │ YOLOv8      │  │ YOLOv8      │
-│ ByteTrack   │  │ ByteTrack   │  │ ByteTrack   │
-│ Face Recog  │  │ Face Recog  │  │ Face Recog  │
-│ Zone Count  │  │ Zone Count  │  │ Zone Count  │
-└─────────────┘  └─────────────┘  └─────────────┘
+┌─────────────────────────────────────────────────────────────────────┐
+│                         Rails Backend API                            │
+│                    (Receives Webhook Events)                         │
+└───────────────────────────────┬─────────────────────────────────────┘
+                                │
+                                │ HTTP Webhooks
+                                │ (person_in, person_out, fire_detected, etc.)
+                                ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                    CCTV Analytics System                             │
+│                                                                       │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                    Main Entry Point (main.py)                  │  │
+│  │              Replaces shell scripts, unified CLI                │  │
+│  └───────────────────────────┬──────────────────────────────────┘  │
+│                                │                                      │
+│                                ▼                                      │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │                  Camera Manager                                │  │
+│  │         (Loads cameras from database, manages processes)        │  │
+│  └───────────────────────────┬──────────────────────────────────┘  │
+│                                │                                      │
+│                    ┌───────────┼───────────┐                        │
+│                    ▼           ▼           ▼                        │
+│  ┌──────────────┐ ┌──────────────┐ ┌──────────────┐               │
+│  │  Camera 1    │ │  Camera 2    │ │  Camera N    │               │
+│  │  Process     │ │  Process      │ │  Process      │               │
+│  └──────┬───────┘ └──────┬───────┘ └──────┬───────┘               │
+│         │                 │                 │                        │
+│         └─────────┬───────┴─────────┬──────┘                        │
+│                   ▼                 ▼                                 │
+│  ┌──────────────────────────────────────────────────────────────┐  │
+│  │              Camera Pipeline (per camera)                      │  │
+│  │                                                                │  │
+│  │  ┌────────────────────────────────────────────────────────┐   │  │
+│  │  │         Detector Factory                                │   │  │
+│  │  │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐    │   │  │
+│  │  │  │ Person   │ │ Fire     │ │ Mask     │ │ Queue    │    │   │  │
+│  │  │  │ Detector │ │ Detector │ │ Detector │ │ Detector │    │   │  │
+│  │  │  └────┬─────┘ └────┬─────┘ └────┬─────┘ └────┬─────┘    │   │  │
+│  │  └───────┼─────────────┼─────────────┼────────────┼─────────┘   │  │
+│  │          │             │             │             │              │  │
+│  │          └─────────────┴─────────────┴─────────────┘              │  │
+│  │                      ▼                                              │  │
+│  │          ┌───────────────────────┐                                 │  │
+│  │          │   Event Aggregator    │                                 │  │
+│  │          │  (Combines detections)│                                 │  │
+│  │          └───────────┬───────────┘                                 │  │
+│  │                      │                                              │  │
+│  │          ┌───────────┴───────────┐                                 │  │
+│  │          ▼                         ▼                                │  │
+│  │  ┌──────────────┐         ┌──────────────┐                         │  │
+│  │  │   Tracker    │         │  Webhook     │                         │  │
+│  │  │  (StrongSORT)│         │   Service    │                         │  │
+│  │  └──────────────┘         └──────┬───────┘                         │  │
+│  │                                   │                                  │  │
+│  └───────────────────────────────────┼──────────────────────────────────┘  │
+│                                        │                                      │
+└────────────────────────────────────────┼──────────────────────────────────────┘
+                                         │
+                                         ▼
+                            ┌──────────────────────┐
+                            │   PostgreSQL DB      │
+                            │  (Events, Attendance) │
+                            └──────────────────────┘
 ```
 
-## 📋 Requirements
+### Folder Structure
 
-- Python 3.8+
-- PostgreSQL 12+ with pgvector extension
-- Webcam or IP camera (RTSP support)
-- (Optional) NVIDIA GPU for faster processing
-- (Recommended) 8GB RAM for multi-camera setup
+```
+cctv/
+├── main.py                      # Main entry point (replaces shell scripts)
+├── config/
+│   ├── config.yaml             # Main configuration
+│   └── config.example.yaml     # Example configuration
+├── src/
+│   └── cctv/
+│       ├── core/               # Core interfaces and base classes
+│       │   ├── base_detector.py      # BaseDetector abstract class
+│       │   ├── detector_factory.py   # Detector factory pattern
+│       │   └── ...
+│       ├── detectors/          # Detection modules (plugins)
+│       │   ├── person_detector.py   # Person detection & counting
+│       │   ├── fire_detector.py     # Fire detection
+│       │   ├── mask_detector.py     # Mask detection (to be added)
+│       │   └── queue_detector.py   # Queue detection (to be added)
+│       ├── services/           # Service layer
+│       │   └── webhook_service.py  # Webhook delivery to Rails
+│       ├── pipeline/           # Processing pipeline
+│       │   └── camera_pipeline.py  # Camera processing orchestration
+│       ├── config/             # Configuration management
+│       │   └── config_manager.py   # Centralized config loading
+│       ├── database/           # Database layer
+│       ├── managers/           # Resource managers
+│       └── utils/              # Utilities
+├── scripts/                    # Utility scripts (migration, setup, etc.)
+├── tests/                      # Test suite
+└── README.md                   # This file
+```
+
+## ✨ Features
+
+### Core Capabilities
+
+- **Multi-Detector Support**: Run multiple detection models simultaneously
+  - Person counting (IN/OUT tracking)
+  - Fire detection
+  - Mask detection (ready for implementation)
+  - Queue/crowd detection (ready for implementation)
+  
+- **Plugin Architecture**: Easy to add new detection types without modifying core code
+
+- **Webhook Integration**: Real-time event delivery to Rails backend
+  - Configurable endpoints per event type
+  - Retry logic and error handling
+  - Async delivery queue
+
+- **Production-Ready**:
+  - Unified entry point (no shell scripts)
+  - Centralized configuration management
+  - Comprehensive logging
+  - Health checks
+  - Graceful shutdown
+
+- **Scalable**:
+  - Multi-camera support (each in separate process)
+  - GPU acceleration support
+  - Efficient resource management
 
 ## 🚀 Quick Start
 
-See **[SETUP.md](SETUP.md)** for detailed installation instructions.
+### Prerequisites
 
-### 1. Install Dependencies
+- Python 3.8+
+- PostgreSQL 12+ with pgvector extension
+- (Optional) NVIDIA GPU with CUDA support
+- RTSP cameras or video files
 
+### Installation
+
+1. **Clone and setup environment**:
 ```bash
-# Create virtual environment
+cd cctv
 python3 -m venv venv
 source venv/bin/activate  # Linux/Mac
-# venv\Scripts\activate  # Windows
+# venv\Scripts\activate    # Windows
 
-# Install dependencies (automated)
-./install_dependencies.sh
-
-# Or install manually
 pip install -r requirements.txt
 pip install -r requirements_face.txt
 ```
 
-### 2. Setup PostgreSQL Database
-
+2. **Setup database**:
 ```bash
-# Install PostgreSQL and pgvector extension
-sudo apt install postgresql postgresql-contrib
-sudo -u postgres psql -c "CREATE EXTENSION vector;"
+# Create database and enable pgvector
+createdb face_recognition
+psql face_recognition -c "CREATE EXTENSION vector;"
 
-# Setup database
-python3 setup_database.py --password your_password
+# Run migrations
+python scripts/setup/setup_database.py
 ```
 
-### 3. Configure Environment Variables
-
+3. **Configure environment**:
 ```bash
-# Copy example .env file
-cp .env.example .env
+# Copy example config
+cp config/config.example.yaml config/config.yaml
 
-# Edit .env and add your credentials
-nano .env
+# Edit config.yaml with your settings
+# Or set environment variables:
+export POSTGRES_HOST=localhost
+export POSTGRES_PASSWORD=your_password
+export WEBHOOK_BASE_URL=http://your-rails-api.com
 ```
 
-Example `.env`:
+4. **Add cameras**:
 ```bash
-# Database
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=face_recognition
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_password
-
-# Camera RTSP URLs
-CAMERA_ENTRANCE_URL=rtsp://admin:password@192.168.1.101:554/stream1
-CAMERA_EXIT_URL=rtsp://admin:password@192.168.1.102:554/stream1
-```
-
-### 4. Add Organizations and Cameras
-
-```bash
-# Add organization
-python3 manage_organizations.py add --name "Company A" --description "Main Office"
-
-# Add camera
-python3 manage_cameras.py add \
+# Add camera via CLI
+python scripts/cli/manage_cameras.py add \
   --camera-id entrance \
   --rtsp-url-env CAMERA_ENTRANCE_URL \
   --location "Main Entrance" \
   --organization-id 1
 ```
 
-### 5. Enroll Employees
-
+5. **Run the system**:
 ```bash
-# Option 1: Simple enrollment (legacy)
-python3 enroll_face.py \
-  --name "John Doe" \
-  --employee-id "EMP001" \
-  --organization-id 1 \
-  --designation "Manager"
+# Run all cameras
+python main.py run
 
-# Option 2: Enhanced enrollment with full person information (recommended)
-./run_manage_persons.sh --enroll \
-  --name "John Doe" \
-  --image photo.jpg \
-  --employee-id "EMP001" \
-  --org-id 1 \
-  --department "Engineering" \
-  --designation "Software Engineer" \
-  --email "john@company.com" \
-  --phone "+1-555-0100"
+# Run specific camera
+python main.py run --camera-id entrance
 
-# Option 3: Enroll from webcam
-./run_manage_persons.sh --enroll \
-  --name "Jane Smith" \
-  --webcam \
-  --employee-id "EMP002" \
-  --org-id 1
-```
+# Run cameras for organization
+python main.py run --org-id 1
 
-### 6. Run the System
-
-```bash
-# Run with GPU acceleration (recommended)
-./run_with_gpu.sh --camera-id entrance
-
-# Or run all cameras
-python3 run_cameras.py
-
-# Run cameras for specific organization
-python3 run_cameras.py --organization-id 1
-
-# List available cameras
-python3 run_cameras.py --list
-```
-
-### 7. View Attendance Reports
-
-```bash
-# View today's attendance
-python3 view_attendance.py
-
-# View specific date
-python3 view_attendance.py --date 2024-01-15
-
-# View for specific organization
-python3 view_attendance.py --organization-id 1
-```
-
-## 📊 How It Works
-
-### 1. Person Detection (YOLOv8)
-- Real-time person detection using YOLOv8
-- Detects people in each frame with bounding boxes
-- Filters detections by confidence threshold
-- Optimized for doorway scenarios
-
-### 2. Multi-Object Tracking (ByteTrack)
-- Advanced tracking with two-stage association
-- Assigns unique IDs to each person
-- Handles occlusions and ID switches
-- Maintains trajectory history for direction validation
-
-### 3. Two-Line Zone System
-- **Outside Line**: First detection line
-- **Transition Zone**: Area between lines
-- **Inside Line**: Second detection line
-- **State Machine**: Tracks journey through zones (OUTSIDE → TRANSITION → INSIDE)
-
-### 4. Face Recognition (InsightFace + ArcFace)
-- Detects faces in each frame
-- Generates 512-dimensional embeddings using ArcFace
-- Matches against enrolled employees in database
-- Uses pgvector for efficient similarity search
-- Cross-camera recognition (same person across cameras)
-
-### 5. Counting & Attendance Logic
-- **IN**: Person crosses from outside → transition → inside
-- **OUT**: Person crosses from inside → transition → outside
-- **Face Match**: Identifies employee and logs attendance
-- **Automatic Attendance**: Updates employee IN/OUT counts
-- **Organization Stats**: Aggregates attendance per organization
-- **Anti-Double Counting**: Cooldown period + spatial separation
-
-### 6. Multi-Camera Management
-- Cameras stored in PostgreSQL database
-- Dynamic loading at runtime (no config editing)
-- Each camera runs in separate process
-- Organization-specific camera filtering
-- Centralized face recognition database
-
-## 📁 Project Structure
-
-```
-cctv/
-├── config/
-│   ├── config.yaml              # Production settings
-│   └── config_dynamic.yaml      # Development settings
-├── database/
-│   └── schema.sql               # PostgreSQL + pgvector schema
-├── src/
-│   ├── detector.py              # YOLOv8 person detection (GPU)
-│   ├── strong_sort.py           # Strong SORT tracker (GPU)
-│   ├── counter.py               # Two-line zone counting
-│   ├── database_pg.py           # PostgreSQL + pgvector manager
-│   ├── face_recognition.py      # InsightFace (GPU-accelerated)
-│   ├── camera_manager.py        # Dynamic camera management
-│   └── utils.py                 # Utility functions
-├── scripts/
-│   ├── install.sh               # Install dependencies
-│   ├── run.sh                   # Run with GPU
-│   └── manage_persons.sh        # Person management
-├── cli/
-│   ├── camera_cli.py            # Camera management
-│   ├── person_cli.py            # Person management (GPU)
-│   └── diagnostic_cli.py        # System diagnostics
-├── templates/
-│   └── dashboard.html           # Web dashboard UI
-├── docs/
-│   ├── README.md                # Main documentation
-│   ├── SETUP.md                 # Setup guide
-│   └── ARCHITECTURE.md          # Architecture guide
-├── models/                      # YOLO models (auto-downloaded)
-├── logs/                        # Application logs
-├── snapshots/                   # Face snapshots (GPU-generated)
-├── output/                      # Output videos
-├── run_cameras.py               # Multi-camera runner
-├── setup_database.py            # Database setup
-├── diagnose.py                  # System diagnostics
-├── requirements.txt             # Core dependencies
-├── requirements_face.txt        # Face recognition (GPU)
-└── .env.example                 # Environment template
-```
-
-**Note**: See `docs/ARCHITECTURE.md` for recommended professional restructuring.
-
-## ⚙️ Configuration Guide
-
-### Application-Wide Settings (config.yaml)
-
-**Note**: Camera-specific configs are now in the **database**, not config.yaml!
-
-```yaml
-# Database Configuration
-database:
-  enabled: true
-  type: postgresql
-  host: localhost
-  port: 5432
-  database: face_recognition
-  user: postgres
-  password: your_password  # Override with POSTGRES_PASSWORD in .env
-
-# Face Recognition Settings (applied to ALL cameras)
-face_recognition:
-  enabled: true
-  model: buffalo_l  # buffalo_l (accurate), buffalo_s (fast)
-  confidence_threshold: 0.6  # 0.0-1.0 (higher = stricter matching)
-  min_face_size: 50
-  max_faces_per_frame: 10
-
-# Detection Settings (applied to ALL cameras)
-detection:
-  model: yolov8n.pt  # n=nano (fast), s/m/l/x (more accurate)
-  confidence: 0.3
-  device: cpu  # "cpu" or "cuda"
-
-# Tracking Settings (applied to ALL cameras)
-tracking:
-  track_high_thresh: 0.4
-  max_age: 90
-  iou_threshold: 0.3
-
-# Default Counting Lines (applied to ALL cameras unless overridden)
-counting_line:
-  outside_line: [0.35, 0.52, 0.65, 0.52]  # [x1, y1, x2, y2] percentage
-  inside_line: [0.35, 0.58, 0.65, 0.58]
-  in_direction: down  # up/down/left/right
-  cooldown_frames: 75
-```
-
-### Camera Management (Database + CLI)
-
-```bash
-# Add camera (no config editing!)
-python3 manage_cameras.py add \
-  --camera-id entrance \
-  --rtsp-url-env CAMERA_ENTRANCE_URL \
-  --location "Main Entrance" \
-  --organization-id 1
+# Start API server
+python main.py api
 
 # List cameras
-python3 manage_cameras.py list
+python main.py list-cameras
 
-# List cameras for specific organization
-python3 manage_cameras.py list --organization-id 1
+# Health check
+python main.py health
 ```
 
-### Environment Variables (.env)
+## ⚙️ Configuration
+
+### Configuration File
+
+Main configuration is in `config/config.yaml`. See `config/config.example.yaml` for all options.
+
+### Environment Variables
+
+Override configuration with environment variables:
 
 ```bash
-# Database credentials
-POSTGRES_HOST=localhost
-POSTGRES_PORT=5432
-POSTGRES_DB=face_recognition
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=your_password
+# Database
+export POSTGRES_HOST=localhost
+export POSTGRES_PORT=5432
+export POSTGRES_DB=face_recognition
+export POSTGRES_USER=postgres
+export POSTGRES_PASSWORD=your_password
 
-# Camera RTSP URLs (secure!)
+# Webhooks
+export WEBHOOK_BASE_URL=http://your-rails-api.com
+
+# Camera RTSP URLs (stored in .env file)
 CAMERA_ENTRANCE_URL=rtsp://admin:password@192.168.1.101:554/stream1
 CAMERA_EXIT_URL=rtsp://admin:password@192.168.1.102:554/stream1
 ```
 
-## 🎯 Camera Setup Tips
+### Detector Configuration
 
-1. **Height**: Mount camera 2.5-3 meters above ground
-2. **Angle**: 30-45° downward (bird's eye view preferred)
-3. **Coverage**: Ensure full door width + 1-2 meters on each side
-4. **Lighting**: Adequate lighting for face recognition (avoid backlighting)
-5. **Resolution**: Minimum 720p, recommended 1080p
-6. **Face Recognition**: Camera should capture faces at 50+ pixels for best results
-7. **Counting Lines**: Position lines perpendicular to traffic flow
+Enable/disable detectors in `config.yaml`:
 
-## 📈 Performance
-
-### Single Camera
-- **Processing Speed**: 15-30 FPS (CPU), 30-60 FPS (GPU)
-- **Counting Accuracy**: 95-98% in ideal conditions
-- **Face Recognition Accuracy**: 99.8% (ArcFace model)
-- **Resource Usage**: ~2GB RAM, ~50% CPU (single core)
-
-### Multi-Camera
-- **Scalability**: Tested with 10+ cameras
-- **Resource Usage**: ~2GB RAM per camera process
-- **Database**: Centralized PostgreSQL (handles 100+ cameras)
-- **Face Recognition**: Shared embeddings across all cameras
-
-## ⚡ GPU Acceleration (Optional)
-
-### Enable GPU for Maximum Performance
-
-**Install GPU Libraries:**
-```bash
-# Uninstall CPU-only ONNX Runtime
-pip uninstall -y onnxruntime
-
-# Install GPU-accelerated ONNX Runtime
-pip install onnxruntime-gpu
-
-# Verify GPU providers
-python3 -c "import onnxruntime as ort; print(ort.get_available_providers())"
-# Should show: ['TensorrtExecutionProvider', 'CUDAExecutionProvider', 'CPUExecutionProvider']
-```
-
-**Update Configuration:**
 ```yaml
-# config/config.yaml and config/config_dynamic.yaml
-detection:
-  device: cuda  # GPU acceleration
-
-face_recognition:
-  providers:
-    - CUDAExecutionProvider  # GPU (50% faster!)
-    - CPUExecutionProvider   # Fallback
+detectors:
+  enabled:
+    - person
+    - fire
+    # - mask
+    # - queue
 ```
 
-**Run with GPU:**
+### Webhook Configuration
+
+Configure webhook endpoints for Rails integration:
+
+```yaml
+webhooks:
+  enabled: true
+  base_url: http://localhost:3000
+  timeout: 5
+  retry_attempts: 3
+  
+  endpoints:
+    person_in: /api/v1/events/person_in
+    person_out: /api/v1/events/person_out
+    fire_detected: /api/v1/events/fire_detected
+```
+
+## 🔌 Adding New Detectors
+
+The system uses a plugin-based architecture. To add a new detector:
+
+### Step 1: Create Detector Class
+
+Create a new file in `src/cctv/detectors/` (e.g., `mask_detector.py`):
+
+```python
+from cctv.core.base_detector import BaseDetector, DetectionResult
+import numpy as np
+from typing import Dict, Any, Optional
+import logging
+
+class MaskDetector(BaseDetector):
+    """Mask detection detector"""
+    
+    def __init__(self, config: Dict[str, Any], logger: Optional[logging.Logger] = None):
+        super().__init__(config, logger)
+        self.model = None
+    
+    def initialize(self) -> bool:
+        """Initialize mask detection model"""
+        # Load your model here
+        # self.model = load_mask_model()
+        self._initialized = True
+        return True
+    
+    def detect(self, frame: np.ndarray) -> DetectionResult:
+        """Detect masks in frame"""
+        # Run detection
+        detections = []
+        # ... your detection logic ...
+        
+        return DetectionResult(
+            detector_type='mask',
+            detections=detections
+        )
+    
+    def get_detector_type(self) -> str:
+        return 'mask'
+    
+    def cleanup(self):
+        # Cleanup resources
+        self._initialized = False
+```
+
+### Step 2: Register Detector
+
+Add to `src/cctv/detectors/__init__.py`:
+
+```python
+from cctv.detectors.mask_detector import MaskDetector
+
+__all__ = ['PersonDetector', 'FireDetector', 'MaskDetector']
+```
+
+The detector is automatically registered via the factory pattern.
+
+### Step 3: Add Configuration
+
+Add detector config to `config.yaml`:
+
+```yaml
+mask_detection:
+  model: mask_model.pt
+  confidence: 0.5
+  device: cuda
+```
+
+### Step 4: Enable Detector
+
+Enable in `config.yaml`:
+
+```yaml
+detectors:
+  enabled:
+    - person
+    - mask  # Add here
+```
+
+### Step 5: Add Webhook Endpoint (Optional)
+
+If you want webhook events:
+
+```yaml
+webhooks:
+  endpoints:
+    mask_detected: /api/v1/events/mask_detected
+```
+
+That's it! The detector will automatically be loaded and run for all cameras.
+
+## 🔗 Webhook Integration
+
+### Event Format
+
+Events are sent as HTTP POST requests to your Rails API:
+
+```json
+{
+  "event_type": "person_in",
+  "timestamp": "2024-01-15T10:30:00.123456",
+  "camera_id": "entrance",
+  "organization_id": 1,
+  "data": {
+    "track_id": 42,
+    "confidence": 0.95,
+    "bbox": [100, 200, 300, 400],
+    "position": {"x": 200, "y": 300}
+  }
+}
+```
+
+### Rails Controller Example
+
+```ruby
+# app/controllers/api/v1/events_controller.rb
+class Api::V1::EventsController < ApplicationController
+  skip_before_action :verify_authenticity_token
+  
+  def person_in
+    event = Event.create!(
+      event_type: 'person_in',
+      camera_id: params[:camera_id],
+      organization_id: params[:organization_id],
+      data: params[:data],
+      timestamp: params[:timestamp]
+    )
+    
+    # Process event (e.g., update attendance)
+    AttendanceService.new.handle_person_in(event)
+    
+    render json: { status: 'ok' }, status: :created
+  end
+  
+  def fire_detected
+    # Handle fire detection event
+    AlertService.new.send_fire_alert(params)
+    render json: { status: 'ok' }, status: :created
+  end
+end
+```
+
+### Supported Event Types
+
+- `person_in` - Person entered zone
+- `person_out` - Person exited zone
+- `fire_detected` - Fire detected in frame
+- `mask_detected` - Mask detection (when implemented)
+- `queue_detected` - Queue/crowd detected (when implemented)
+
+### Webhook Reliability
+
+- **Async Delivery**: Webhooks are sent asynchronously via queue
+- **Retry Logic**: Failed webhooks are retried up to 3 times
+- **Error Handling**: Errors are logged but don't block processing
+- **Queue Monitoring**: Check queue size via `webhook_service.get_queue_size()`
+
+## 🚢 Production Deployment
+
+### Systemd Service
+
+Create `/etc/systemd/system/cctv.service`:
+
+```ini
+[Unit]
+Description=CCTV Analytics System
+After=network.target postgresql.service
+
+[Service]
+Type=simple
+User=cctv
+WorkingDirectory=/opt/cctv
+Environment="PATH=/opt/cctv/venv/bin"
+ExecStart=/opt/cctv/venv/bin/python main.py run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+```
+
+Enable and start:
 ```bash
-# Use GPU wrapper script (handles CUDA library paths)
-./run_with_gpu.sh --camera-id entrance
-
-# Or for person enrollment
-./run_manage_persons.sh --enroll --name "John Doe" --webcam --org-id 1
+sudo systemctl enable cctv
+sudo systemctl start cctv
+sudo systemctl status cctv
 ```
 
-**Performance Gains:**
-- YOLOv8 Detection: ~60 FPS (GPU) vs ~15 FPS (CPU)
-- Face Detection: ~80 FPS (GPU) vs ~30 FPS (CPU)
-- Face Embedding: ~120 FPS (GPU) vs ~40 FPS (CPU)
-- **Overall: 50-60 FPS (GPU) vs 20-30 FPS (CPU)**
+### Docker Deployment
 
-## 👥 Person Management
+```dockerfile
+FROM python:3.10-slim
 
-### Enhanced Person Enrollment
+WORKDIR /app
+COPY requirements*.txt ./
+RUN pip install --no-cache-dir -r requirements.txt -r requirements_face.txt
 
-Use `manage_persons.py` for comprehensive person management:
-
-```bash
-# List organizations
-./run_manage_persons.sh --list-orgs
-
-# Create organization
-./run_manage_persons.sh --create-org \
-  --org-name "Tech Corp" \
-  --org-code "TECH001" \
-  --org-contact-email "admin@techcorp.com"
-
-# Enroll person with full information
-./run_manage_persons.sh --enroll \
-  --name "John Doe" \
-  --image photo.jpg \
-  --employee-id "EMP001" \
-  --org-id 1 \
-  --department "Engineering" \
-  --designation "Software Engineer" \
-  --email "john@company.com" \
-  --phone "+1-555-0100"
-
-# Enroll from webcam
-./run_manage_persons.sh --enroll \
-  --name "Jane Smith" \
-  --webcam \
-  --org-id 1
-
-# List all persons
-./run_manage_persons.sh --list-persons
-
-# Search person
-./run_manage_persons.sh --search "john"
+COPY . .
+CMD ["python", "main.py", "run"]
 ```
 
-**Features:**
-- ✅ GPU-accelerated face detection and embedding
-- ✅ Store comprehensive person information (employee ID, department, email, phone)
-- ✅ Organization management
-- ✅ Webcam or image file enrollment
-- ✅ Search and list persons
-- ✅ 512-dim ArcFace embeddings stored in PostgreSQL with pgvector
+### Monitoring
 
-## 🛠️ Available Scripts
+- **Logs**: Check `logs/app.log`
+- **Health**: `python main.py health`
+- **Metrics**: Monitor GPU usage, queue sizes, event rates
 
-### Core Scripts
-- `./install_dependencies.sh` - Install all Python dependencies
-- `./run_with_gpu.sh` - Run camera system with GPU acceleration
-- `./run_manage_persons.sh` - Manage persons and organizations with GPU
-- `python3 diagnose.py` - System diagnostic tool
+### Scaling
 
-### Management Scripts
-- `python3 manage_cameras.py` - Camera management
-- `python3 manage_organizations.py` - Organization management (legacy)
-- `python3 setup_database.py` - Database initialization
-- `python3 view_attendance.py` - View attendance reports
+- **Horizontal**: Run multiple instances, each handling different cameras
+- **Vertical**: Increase GPU memory, CPU cores
+- **Database**: Use connection pooling, read replicas
 
-### Testing Scripts
-- `python3 test_camera.py` - Test camera connection
-- `python3 test_face_recognition_live.py` - Test face recognition with webcam
-- `python3 test_gpu_usage.py` - Test GPU acceleration
+## 📚 API Reference
 
-## 🔧 Troubleshooting
-
-### Run Diagnostics
-```bash
-# Check all systems
-python3 diagnose.py
-```
-
-### Database Connection Issues
-```bash
-# Test PostgreSQL connection
-psql -h localhost -U postgres -d face_recognition
-
-# Check if pgvector extension is installed
-psql -h localhost -U postgres -d face_recognition -c "SELECT * FROM pg_extension WHERE extname = 'vector';"
-```
-
-### Camera Not Starting
-```bash
-# Test camera connection
-python3 -c "
-import cv2
-import os
-from dotenv import load_dotenv
-load_dotenv()
-url = os.getenv('CAMERA_ENTRANCE_URL')
-cap = cv2.VideoCapture(url)
-print('Connected!' if cap.isOpened() else 'Failed!')
-cap.release()
-"
-
-# Check if camera exists in database
-python3 manage_cameras.py list
-```
-
-### Face Recognition Not Working
-```bash
-# Check if InsightFace models are downloaded
-ls ~/.insightface/models/
-
-# Test face detection
-python3 -c "
-from insightface.app import FaceAnalysis
-app = FaceAnalysis(providers=['CPUExecutionProvider'])
-app.prepare(ctx_id=0, det_size=(640, 640))
-print('Face recognition initialized successfully!')
-"
-```
-
-### Low FPS / Performance Issues
-- Use smaller YOLO model: `yolov8n.pt` (fastest)
-- Increase `skip_frames` in config (process every Nth frame)
-- Enable GPU: Set `device: cuda` in config
-- Reduce video resolution
-- Disable face recognition if not needed: `face_recognition.enabled: false`
-- Use smaller face model: `buffalo_s` instead of `buffalo_l`
-
-### Inaccurate Counting
-- Calibrate counting lines: `python3 calibrate_two_lines.py`
-- Adjust detection confidence (try 0.3-0.5)
-- Increase `cooldown_frames` to prevent double counting
-- Check camera angle and positioning
-- Ensure good lighting
-
-### Face Recognition Accuracy Issues
-- Ensure faces are at least 50 pixels in size
-- Improve lighting conditions
-- Adjust `confidence_threshold` (lower = more lenient, higher = stricter)
-- Re-enroll employees with better quality images
-- Use multiple face angles during enrollment
-
-## 📝 Database Schema
-
-### Key Tables
-
-**organizations**
-- Organization/company information
-- Tracks multiple companies in the system
-
-**persons**
-- Employee information (name, employee_id, designation)
-- Links to organization
-- Stores face embeddings (512-dimensional ArcFace vectors)
-
-**cameras**
-- Camera configurations
-- Links to organization
-- Stores environment variable name for RTSP URL (not the URL itself!)
-
-**entry_exit_events**
-- Every IN/OUT event with timestamp
-- Links to person (if face recognized)
-- Links to camera
-- Stores event type, position, counts
-
-**employee_attendance**
-- Daily attendance per employee
-- Tracks: total_in, total_out, first_in_time, last_out_time, duration, is_present
-
-**organization_attendance**
-- Daily attendance per organization
-- Tracks: present_count, total_in_count, total_out_count, peak_occupancy
-
-See `database/schema.sql` for complete schema.
-
-## 🔌 REST API (Optional)
-
-Start the API server for remote camera management:
-
-```bash
-python3 camera_api.py
-```
-
-### API Endpoints
-
-```bash
-# Get all cameras
-curl http://localhost:5000/api/cameras
-
-# Get cameras for specific organization
-curl http://localhost:5000/api/cameras?organization_id=1
-
-# Add camera
-curl -X POST http://localhost:5000/api/cameras \
-  -H "Content-Type: application/json" \
-  -d '{
-    "camera_id": "new_camera",
-    "rtsp_url_env": "CAMERA_NEW_URL",
-    "location": "New Location",
-    "organization_id": 1
-  }'
-
-# Test camera connection
-curl http://localhost:5000/api/test-camera/entrance
-
-# Get organizations
-curl http://localhost:5000/api/organizations
-```
-
-## 📊 Usage Examples
-
-### Example 1: Single Organization, Multiple Cameras
-
-```bash
-# 1. Add organization
-python3 manage_organizations.py add --name "Company A" --description "Main Office"
-
-# 2. Add cameras
-python3 manage_cameras.py add --camera-id entrance --rtsp-url-env CAMERA_ENTRANCE_URL --organization-id 1
-python3 manage_cameras.py add --camera-id exit --rtsp-url-env CAMERA_EXIT_URL --organization-id 1
-
-# 3. Enroll employees
-python3 enroll_face.py --name "John Doe" --employee-id "EMP001" --organization-id 1
-python3 enroll_face.py --name "Jane Smith" --employee-id "EMP002" --organization-id 1
-
-# 4. Run all cameras
-python3 run_cameras.py
-
-# 5. View attendance
-python3 view_attendance.py --organization-id 1
-```
-
-### Example 2: Multi-Organization Setup
+### Main Entry Point
 
 ```bash
-# Add multiple organizations
-python3 manage_organizations.py add --name "Company A"
-python3 manage_organizations.py add --name "Company B"
-python3 manage_organizations.py add --name "Company C"
+python main.py <command> [options]
 
-# Add cameras for each organization
-python3 manage_cameras.py add --camera-id a_entrance --rtsp-url-env CAMERA_A_ENTRANCE --organization-id 1
-python3 manage_cameras.py add --camera-id b_entrance --rtsp-url-env CAMERA_B_ENTRANCE --organization-id 2
-python3 manage_cameras.py add --camera-id c_entrance --rtsp-url-env CAMERA_C_ENTRANCE --organization-id 3
-
-# Run cameras for specific organization
-python3 run_cameras.py --organization-id 1  # Only Company A cameras
-
-# Run all cameras
-python3 run_cameras.py  # All organizations
+Commands:
+  run              Run camera processing system
+  api              Start REST API server
+  list-cameras     List available cameras
+  health           System health check
 ```
 
-### Example 3: Adding New Camera (No Config Editing!)
+### Detector Interface
 
-```bash
-# 1. Add RTSP URL to .env
-echo "CAMERA_NEW_URL=rtsp://admin:pass@192.168.1.104:554/stream1" >> .env
+All detectors must implement `BaseDetector`:
 
-# 2. Add camera to database
-python3 manage_cameras.py add \
-  --camera-id new_camera \
-  --rtsp-url-env CAMERA_NEW_URL \
-  --location "New Location" \
-  --organization-id 1
-
-# 3. Run cameras (includes new camera!)
-python3 run_cameras.py
+```python
+class BaseDetector(ABC):
+    def initialize(self) -> bool
+    def detect(self, frame: np.ndarray) -> DetectionResult
+    def get_detector_type(self) -> str
+    def cleanup(self)
 ```
 
-## 🎓 Key Concepts
+### Webhook Service
 
-### Dynamic Camera Management
-- **Old Way**: Edit config.yaml for each camera ❌
-- **New Way**: Add cameras via CLI/API, stored in database ✅
-- **Benefits**: No config editing, no restart needed (future), scalable
-
-### Face Recognition Workflow
-1. **Enrollment**: Capture face → Generate embedding → Store in database
-2. **Recognition**: Detect face → Generate embedding → Search database → Match person
-3. **Cross-Camera**: Same embedding works across all cameras
-4. **Attendance**: Automatic IN/OUT tracking when face is recognized
-
-### Two-Line Zone System
-- **Outside Line**: First detection line
-- **Transition Zone**: Area between lines (6% of frame height)
-- **Inside Line**: Second detection line
-- **State Machine**: Tracks person's journey through zones
-- **Benefits**: More accurate than single-line, handles simultaneous crossings
+```python
+webhook_service = WebhookService(config, logger)
+webhook_service.send_event(
+    event_type='person_in',
+    data={'track_id': 42},
+    camera_id='entrance',
+    organization_id=1
+)
+```
 
 ## 🤝 Contributing
 
-Feel free to submit issues and enhancement requests!
+1. Follow the detector interface pattern
+2. Add tests for new detectors
+3. Update documentation
+4. Ensure GPU compatibility
 
 ## 📄 License
 
-This project is open source and available for educational and commercial use.
+[Your License Here]
 
 ## 🙏 Acknowledgments
 
-- **YOLOv8** by Ultralytics - Person detection
-- **ByteTrack** - Multi-object tracking
-- **InsightFace** - Face recognition
-- **ArcFace** - Face embedding model
-- **PostgreSQL** + **pgvector** - Vector database
-- **OpenCV** - Computer vision library
+- YOLOv8 by Ultralytics
+- InsightFace for face recognition
+- StrongSORT for tracking
+- PostgreSQL + pgvector
 
+---
+
+**Need Help?** Check the [SETUP.md](SETUP.md) for detailed setup instructions.
